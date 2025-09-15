@@ -24,6 +24,12 @@ void memoryRequest(trace_op* op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t));
 void coherCallback(int type, int procNum, int64_t addr);
 
+unsigned long E = 1;
+unsigned long S = 1;
+unsigned long B = 1;
+unsigned long i = 1;
+unsigned long k = 1;
+
 typedef struct {
     bool valid_bit;
     bool dirty_bit;
@@ -36,12 +42,6 @@ cache_line **main_cache = NULL;
 cache* init(cache_sim_args* csa)
 {
     int op;
-
-    unsigned long E = 1;
-    unsigned long S = 1;
-    unsigned long B = 1;
-    unsigned long i = 1;
-    unsigned long k = 1;
 
     // get argument list from assignment
     while ((op = getopt(csa->arg_count, csa->arg_list, "E:s:b:i:R:")) != -1)
@@ -166,5 +166,11 @@ int finish(int outFd)
 int destroy(void)
 {
     // free any internally allocated memory here
+    // free main cache
+    for (unsigned long i = 0; i < S; i++) {
+        free(main_cache[i]);
+    }
+    free(main_cache);
+
     return 0;
 }
