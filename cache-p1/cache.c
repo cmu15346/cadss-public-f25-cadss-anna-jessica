@@ -24,36 +24,64 @@ void memoryRequest(trace_op* op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t));
 void coherCallback(int type, int procNum, int64_t addr);
 
+typedef struct {
+    bool valid_bit;
+    bool dirty_bit;
+    unsigned long tag;
+    size_t LRU_counter;
+} cache_line;
+
+cache_line **main_cache = NULL;
+
 cache* init(cache_sim_args* csa)
 {
     int op;
 
-    // TODO - get argument list from assignment
+    unsigned long E = 1;
+    unsigned long S = 1;
+    unsigned long B = 1;
+    unsigned long i = 1;
+    unsigned long k = 1;
+
+    // get argument list from assignment
     while ((op = getopt(csa->arg_count, csa->arg_list, "E:s:b:i:R:")) != -1)
     {
         switch (op)
         {
             // Lines per set
             case 'E':
+                E = strtoul(optarg, NULL, 10);
                 break;
 
             // Sets per cache
             case 's':
+                S = strtoul(optarg, NULL, 10);
                 break;
 
             // block size in bits
             case 'b':
+                B = strtoul(optarg, NULL, 10);
                 break;
 
             // entries in victim cache
             case 'i':
+                i = strtoul(optarg, NULL, 10);
                 break;
 
             // bits in a RRIP-based replacement policy
             case 'R':
-
+                k = strtoul(optarg, NULL, 10);
                 break;
         }
+    }
+
+    // create cache in memory
+    main_cache = (cache_line **)calloc(
+        S, sizeof(cache_line *)); // equivalent to cache[S][E]
+
+    // clear the cache
+    for (unsigned long i = 0; i < S; i++) {
+        main_cache[i] = (cache_line *)calloc(E, sizeof(cache_line));
     }
 
     self = malloc(sizeof(cache));
