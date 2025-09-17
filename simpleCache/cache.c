@@ -1,11 +1,11 @@
-#include <cache.h>
-#include <trace.h>
+#include "../common/cache.h"
+#include "../common/trace.h"
 
 #include <getopt.h>
 #include <stdlib.h>
 #include <assert.h>
 
-#include <coherence.h>
+#include "../common/coherence.h"
 #include "stree.h"
 
 cache* self = NULL;
