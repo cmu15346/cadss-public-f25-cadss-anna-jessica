@@ -123,7 +123,10 @@ uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
         case DATA_RECV:
         case INVALIDATE:
         case NO_ACTION:
+            printf("start coherence to cache callabck for addrs  %lX\n", addr);
+            printf("type of callback: %d\n", ca);
             cacheCallback(ca, processorNum, addr);
+            printf("finish coherence to cache callback for addrd %lX\n", addr);
             break;
 
         default:
@@ -149,6 +152,8 @@ uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
 
 uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
 {
+
+    printf("start permreq\n");
     if (processorNum < 0 || processorNum >= processorCount)
     {
         // ERROR
@@ -187,11 +192,14 @@ uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
     }
 
     setState(addr, processorNum, nextState);
+
+    printf("end permreq\n");
     return permAvail;
 }
 
 uint8_t invlReq(uint64_t addr, int processorNum)
 {
+    printf("start invReq\n");
     coherence_states currentState, nextState = INVALID;
     cache_action ca;
     uint8_t flush;
@@ -239,6 +247,7 @@ uint8_t invlReq(uint64_t addr, int processorNum)
     tree_remove(coherStates[processorNum], addr);
 
     // Notify about "permReqOnFlush".
+    printf("end invReq\n");
     return flush;
 }
 

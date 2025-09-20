@@ -14,7 +14,8 @@ interconn* interComp;
 int countDown = 0;
 
 // This is the same as "BUS_TIME".
-const int DRAM_FETCH_TICKS = 90;
+// const int DRAM_FETCH_TICKS = 90;
+const int DRAM_FETCH_TICKS = 1;
 
 memory* init(memory_sim_args* args)
 {

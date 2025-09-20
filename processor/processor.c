@@ -83,6 +83,7 @@ int64_t makeTag(int procNum, int64_t baseTag)
 
 void memOpCallback(int procNum, int64_t tag)
 {
+    printf("cache to processor callback\n");
     int64_t baseTag = (tag >> 8);
 
     // Is the completed memop one that is pending?
@@ -109,7 +110,9 @@ int tick(void)
 
     // Pass along to the branch predictor and cache simulator that time ticked
     bs->si.tick();
+    printf("before cache tick\n");
     cs->si.tick();
+    printf("after cache tick\n");
     tickCount++;
 
     if (tickCount == stallCount)
@@ -157,8 +160,10 @@ int tick(void)
             case MEM_LOAD:
             case MEM_STORE:
                 pendingMem[i] = 1;
+                printf("before memRequest\n");
                 cs->memoryRequest(nextOp, i, makeTag(i, memOpTag[i]),
                                   memOpCallback);
+                printf("after memRequest\n");
                 break;
 
             case BRANCH:
