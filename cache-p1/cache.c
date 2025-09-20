@@ -29,8 +29,10 @@ int processorCount = 1;
 int CADSS_VERBOSE = 0;
 pendingRequest *pending = NULL;
 
-#define DPRINTF(args...)  if (CADSS_VERBOSE) { printf(args); }
-
+#define DPRINTF(args...)                                                       \
+    if (CADSS_VERBOSE) {                                                       \
+        printf(args);                                                          \
+    }
 
 void enqueueRequest(int64_t permAddr, bool isLoad, bool isStarted,
                     bool hasEvict, bool isHit, int64_t invAddr) {
@@ -57,8 +59,8 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t));
 void coherCallback(int type, int procNum, int64_t addr);
 
-unsigned long E, s, B, i, k = 0;
-unsigned long S, L = 0;
+unsigned long E, s, b, i, k = 0;
+unsigned long S, B = 0;
 unsigned long iteration = 0; // timestamp used for LRU
 
 typedef struct {
@@ -82,10 +84,10 @@ int load(unsigned long addr, unsigned long *evict_addr) {
     unsigned long addr_set_index, addr_tag;
     if (s == 0) {
         addr_set_index = 0;
-        addr_tag = addr >> B;
+        addr_tag = addr >> b;
     } else {
-        addr_set_index = (addr << (64UL - (s + B))) >> (64UL - s);
-        addr_tag = addr >> (s + B);
+        addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
+        addr_tag = addr >> (s + b);
     }
     // DPRINTF("addr as hex: %lX\n", addr);
     // DPRINTF("set index: %ld, S: %ld\n", addr_set_index, S);
@@ -135,11 +137,11 @@ int load(unsigned long addr, unsigned long *evict_addr) {
     // }
 
     if (s == 0) {
-        *evict_addr = curr_set[LRU_index].tag << B;
+        *evict_addr = curr_set[LRU_index].tag << b;
     } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + B)) + (LRU_index << B);
+        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (LRU_index << b);
     }
-    
+
     // *evict_addr = 0x20;
     DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
 
@@ -166,10 +168,10 @@ int store(unsigned long addr, unsigned long *evict_addr) {
     unsigned long addr_set_index, addr_tag;
     if (s == 0) {
         addr_set_index = 0;
-        addr_tag = addr >> B;
+        addr_tag = addr >> b;
     } else {
-        addr_set_index = (addr << (64UL - (s + B))) >> (64UL - s);
-        addr_tag = addr >> (s + B);
+        addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
+        addr_tag = addr >> (s + b);
     }
     cache_line *curr_set = main_cache[addr_set_index];
 
@@ -211,9 +213,9 @@ int store(unsigned long addr, unsigned long *evict_addr) {
     }
     // evict address: translate set index and line number to address
     if (s == 0) {
-        *evict_addr = curr_set[LRU_index].tag << B;
+        *evict_addr = curr_set[LRU_index].tag << b;
     } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + B)) + (LRU_index << B);
+        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (LRU_index << b);
     }
     DPRINTF("calculated evict address: %lX", *evict_addr);
 
@@ -245,8 +247,8 @@ cache *init(cache_sim_args *csa) {
 
         // block size in bits
         case 'b':
-            B = strtoul(optarg, NULL, 10);
-            L = 1 << B;
+            b = strtoul(optarg, NULL, 10);
+            B = 1 << b;
             break;
 
         // entries in victim cache
@@ -335,43 +337,39 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
     case MEM_LOAD:
     case MEM_STORE:
         // load first address
-        res1 = op->op == MEM_LOAD ? load(op->memAddress, &evict_addr)
-                                  : store(op->memAddress, &evict_addr);
-        uint64_t addr = op->memAddress & ~(L - 1);
+        ;
+        uint64_t addr = op->memAddress & ~(B - 1);
+        res1 = op->op == MEM_LOAD ? load(addr, &evict_addr)
+                                  : store(addr, &evict_addr);
         if (res1 == 1) {
             // just miss
             DPRINTF("miss\n");
-
-            enqueueRequest(addr, op->op == MEM_LOAD, false, false, false,0);
-            // coherComp->permReq(true, addr, processorNum);
+            enqueueRequest(addr, op->op == MEM_LOAD, false, false, false, 0);
         } else if (res1 == 2) {
             // miss and evict
             DPRINTF("miss\n");
-            enqueueRequest(addr, op->op == MEM_LOAD, false, true, false, evict_addr);
-            // coherComp->invlReq(addr, processorNum);
-            // coherComp->permReq(true, addr, processorNum);
+            enqueueRequest(addr, op->op == MEM_LOAD, false, true, false,
+                           evict_addr);
         } else {
             enqueueRequest(addr, false, false, false, true, 0);
         }
 
         // check if access crosses line boundary
-        if (op->memAddress % L + op->size > L) {
+        if (op->memAddress % B + op->size > B) {
             // access spans two lines, load the next address as well
-            uint64_t next_addr = (op->memAddress & ~(L - 1)) + L;
+            uint64_t next_addr = (op->memAddress & ~(B - 1)) + B;
             res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr)
                                       : store(next_addr, &evict_addr);
             if (res2 == 1) {
                 // just miss
-                enqueueRequest(next_addr, op->op == MEM_LOAD, false, false, false, 0);
-                // coherComp->permReq(true, next_addr, processorNum);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, false, false,
+                               false, 0);
             } else if (res2 == 2) {
                 // miss and evict
-                // coherComp->invlReq(next_addr, processorNum);
-                // coherComp->permReq(true, next_addr, processorNum);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, false, true, false,
-                               evict_addr);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, false, true,
+                               false, evict_addr);
             } else {
-            enqueueRequest(next_addr, false, false, false, true, 0);
+                enqueueRequest(next_addr, false, false, false, true, 0);
             }
         }
         break;
