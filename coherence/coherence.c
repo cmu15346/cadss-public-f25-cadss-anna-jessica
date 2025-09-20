@@ -153,7 +153,7 @@ uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
 uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
 {
 
-    printf("start permreq\n");
+    printf("start permreq for addr %lX, isRead = %d\n", addr, is_read);
     if (processorNum < 0 || processorNum >= processorCount)
     {
         // ERROR
@@ -193,13 +193,13 @@ uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
 
     setState(addr, processorNum, nextState);
 
-    printf("end permreq\n");
+    printf("end permreq for addr %lX, isRead = %d\n", addr, is_read);
     return permAvail;
 }
 
 uint8_t invlReq(uint64_t addr, int processorNum)
 {
-    printf("start invReq\n");
+    printf("start invReq, addr: %lX\n", addr);
     coherence_states currentState, nextState = INVALID;
     cache_action ca;
     uint8_t flush;
