@@ -1,31 +1,90 @@
 #include "../common/cache.h"
 #include "../common/trace.h"
 
-#include <getopt.h>
-#include <stdlib.h>
 #include <assert.h>
+#include <getopt.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define DPRINTF(args...)                                                       \
+    if (CADSS_VERBOSE) {                                                       \
+        printf(args);                                                          \
+    }
+
+typedef enum cacheResult_ { HIT , MISS , MISS_EVICT } cacheResult;
+typedef enum reqType_ { PERM , INV } reqType;
 
 typedef struct _pendingRequest {
-    int64_t tag;
-    int8_t procNum;
-    void (*memCallback)(int, int64_t);
+    int64_t addr;
+    bool isStarted;
+    bool isLoad;
+    reqType requestType;
+    cacheResult cacheResult;
+    struct _pendingRequest *next;
 } pendingRequest;
 
-cache* self = NULL;
-coher* coherComp = NULL;
+// nul terminated so tail points to last node
+typedef struct _pendingQueue {
+    pendingRequest* head;
+    pendingRequest* tail;
+} pendingQueue;
+
+int64_t globalTag = 0;
+int8_t procNum = 0;
+
+void (*memCallback)(int, int64_t);
+
+cache *self = NULL;
+coher *coherComp = NULL;
 
 int processorCount = 1;
 int CADSS_VERBOSE = 0;
-pendingRequest pending = {0};
-int countDown = 0; // 0 = no pending requests, 1 = ready request, 2 = pending request
+pendingQueue q = {0};
 
-void memoryRequest(trace_op* op, int processorNum, int64_t tag,
+void enqueueNode(pendingRequest* node) {
+   if (q.head == NULL) {
+       q.head = node;
+       q.tail = node;
+   } 
+   else {
+       assert(q.tail != NULL);
+       q.tail->next = node;
+       q.tail = node;
+   }
+}
+
+void dequeueRequest() {
+    assert(q.head != NULL && q.tail != NULL);
+    DPRINTF("popping from queue\n");
+    pendingRequest* temp = q.head;
+    if (q.head == q.tail) {
+        q.tail = NULL;
+    }
+    q.head = q.head->next;
+    DPRINTF("address of head: %p\n", q.head);
+    free(temp);
+}
+
+void enqueueRequest(int64_t addr, bool isLoad,
+                    reqType requestType, cacheResult cacheResult) {
+    struct _pendingRequest *newReq = malloc(sizeof(struct _pendingRequest));
+    // initialize newReq
+    newReq->addr = addr;
+    newReq->isStarted = false;
+    newReq->isLoad = isLoad;
+    newReq->requestType = requestType;
+    newReq->cacheResult = cacheResult;
+    newReq->next = NULL;
+    enqueueNode(newReq);
+}
+
+void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t));
 void coherCallback(int type, int procNum, int64_t addr);
 
-unsigned long E, S, B, i, k = 0;
-unsigned long L = 0;
+unsigned long E, s, b, i, k = 0;
+unsigned long S, B = 0;
 unsigned long iteration = 0; // timestamp used for LRU
 
 typedef struct {
@@ -45,15 +104,17 @@ cache_line **main_cache = NULL;
  *
  * Updates cache with result of load operation using a given address
  */
-int load(unsigned long addr) {
+int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
     unsigned long addr_set_index, addr_tag;
-    if (S == 0) {
+    if (s == 0) {
         addr_set_index = 0;
-        addr_tag = addr >> B;
+        addr_tag = addr >> b;
     } else {
-        addr_set_index = (addr << (64UL - (S + B))) >> (64UL - S);
-        addr_tag = addr >> (S + B);
+        addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
+        addr_tag = addr >> (s + b);
     }
+    // DPRINTF("addr as hex: %lX\n", addr);
+    // DPRINTF("set index: %ld, S: %ld\n", addr_set_index, S);
     cache_line *curr_set = main_cache[addr_set_index];
 
     // Loop through lines to get matching tag
@@ -80,6 +141,11 @@ int load(unsigned long addr) {
         }
     }
 
+    // Skip logic for eviction and storing in cache when evict is false
+    if (!evict) {
+        return 1;
+    }
+
     // Didn't find invalid bits? - need to evict -- find least recently used
     // index
     unsigned long LRU_index = 0;
@@ -91,6 +157,14 @@ int load(unsigned long addr) {
         }
     }
 
+    if (s == 0) {
+        *evict_addr = curr_set[LRU_index].tag << b;
+    } else {
+        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (LRU_index << b);
+    }
+
+    DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
+
     // Overwrite the line - YAY miss, evict
     // Update entry
     // If that index has dirty bits - we are evicting dirty bits!
@@ -99,6 +173,7 @@ int load(unsigned long addr) {
     // update tag and LRU_counter
     curr_set[LRU_index].tag = addr_tag;
     curr_set[LRU_index].LRU_counter = iteration;
+
     return 2; // MISS and EVICT
 }
 
@@ -109,14 +184,14 @@ int load(unsigned long addr) {
  *
  * Updates cache with result of store operation using a given address
  */
-int store(unsigned long addr) {
+int store(unsigned long addr, unsigned long *evict_addr, bool evict) {
     unsigned long addr_set_index, addr_tag;
-    if (S == 0) {
+    if (s == 0) {
         addr_set_index = 0;
-        addr_tag = addr >> B;
+        addr_tag = addr >> b;
     } else {
-        addr_set_index = (addr << (64UL - (S + B))) >> (64UL - S);
-        addr_tag = addr >> (S + B);
+        addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
+        addr_tag = addr >> (s + b);
     }
     cache_line *curr_set = main_cache[addr_set_index];
 
@@ -145,6 +220,11 @@ int store(unsigned long addr) {
             return 1; // MISS, no evict
         }
     }
+      
+    // Skip logic for eviction and storing in cache when evict is false
+    if (!evict) {
+        return 1;
+    }
 
     // Didn't find invalid bits? - need to evict -- find least recently used
     // index
@@ -156,6 +236,13 @@ int store(unsigned long addr) {
             LRU_index = line_index;
         }
     }
+    // evict address: translate set index and line number to address
+    if (s == 0) {
+        *evict_addr = curr_set[LRU_index].tag << b;
+    } else {
+        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (LRU_index << b);
+    }
+    DPRINTF("calculated evict address: %lX\n", *evict_addr);
 
     // Overwrite the line - YAY miss, evict
     // If that index has dirty bits - we are evicting dirty bits!
@@ -166,40 +253,38 @@ int store(unsigned long addr) {
     return 2; // MISS and EVICT
 }
 
-cache* init(cache_sim_args* csa)
-{
+cache *init(cache_sim_args *csa) {
     int op;
 
     // get argument list from assignment
-    while ((op = getopt(csa->arg_count, csa->arg_list, "E:s:b:i:R:")) != -1)
-    {
-        switch (op)
-        {
-            // Lines per set
-            case 'E':
-                E = strtoul(optarg, NULL, 10);
-                break;
+    while ((op = getopt(csa->arg_count, csa->arg_list, "E:s:b:i:R:")) != -1) {
+        switch (op) {
+        // Lines per set
+        case 'E':
+            E = strtoul(optarg, NULL, 10);
+            break;
 
-            // Sets per cache
-            case 's':
-                S = strtoul(optarg, NULL, 10);
-                break;
+        // Sets per cache
+        case 's':
+            s = strtoul(optarg, NULL, 10);
+            S = 1UL << s;
+            break;
 
-            // block size in bits
-            case 'b':
-                B = strtoul(optarg, NULL, 10);
-                L = 1 << B;
-                break;
+        // block size in bits
+        case 'b':
+            b = strtoul(optarg, NULL, 10);
+            B = 1 << b;
+            break;
 
-            // entries in victim cache
-            case 'i':
-                i = strtoul(optarg, NULL, 10);
-                break;
+        // entries in victim cache
+        case 'i':
+            i = strtoul(optarg, NULL, 10);
+            break;
 
-            // bits in a RRIP-based replacement policy
-            case 'R':
-                k = strtoul(optarg, NULL, 10);
-                break;
+        // bits in a RRIP-based replacement policy
+        case 'R':
+            k = strtoul(optarg, NULL, 10);
+            break;
         }
     }
 
@@ -224,30 +309,54 @@ cache* init(cache_sim_args* csa)
     return self;
 }
 
-// This routine is a linkage to the rest of the memory hierarchy
-void coherCallback(int type, int procNum, int64_t addr)
-{
-    switch (type)
-    {
-        case NO_ACTION:
-        case DATA_RECV:
-            // TODO: check that the addr is the pending access
-            //  This indicates that the cache has received data from memory
-            countDown = 1;
-            break;
 
-        case INVALIDATE:
-            // This is taught later in the semester.
-            break;
-
-        default:
-            break;
-    }  
+// we only call permReq on misses, but what we consider a cache miss might not be a cache miss 
+// according to coherence. in those cases we won't get a callback so we just need to advance 
+// the queue manually ourselves (aka we can't wait for next tick)
+// note this only happens if permReq returns 1
+void handlePermReq() {
+    q.head->isStarted = true;
+    if (coherComp->permReq(q.head->isLoad, q.head->addr, procNum)) {
+        dequeueRequest();
+    }
 }
 
-void memoryRequest(trace_op* op, int processorNum, int64_t tag,
-                   void (*callback)(int, int64_t))
-{
+// invReq's equivalent to permReq's handlePermReq
+void handleInvReq() {
+    q.head->isStarted = true;
+    // invlReq should return 1 for P1 (aka wait)
+    assert(coherComp->invlReq(q.head->addr, procNum));
+}
+
+// This routine is a linkage to the rest of the memory hierarchy
+void coherCallback(int type, int procNum, int64_t addr) {
+    switch (type) {
+    case NO_ACTION:
+        DPRINTF("** received inv callback\n");
+        // dq current invreq
+        dequeueRequest();
+        handlePermReq();
+        break;
+    case DATA_RECV:
+        // This indicates that the cache has received data from memory
+
+        // check that the addr is the pending access
+        assert(addr == q.head->addr);
+        dequeueRequest();
+        break;
+
+    case INVALIDATE:
+        // This is taught later in the semester.
+        break;
+
+    default:
+        break;
+    }
+}
+
+
+void memoryRequest(trace_op *op, int processorNum, int64_t tag,
+                   void (*callback)(int, int64_t)) {
     assert(op != NULL);
     assert(callback != NULL);
 
@@ -257,117 +366,108 @@ void memoryRequest(trace_op* op, int processorNum, int64_t tag,
     //     assert(pending.memCallback != NULL);
     //     pending.memCallback(pending.procNum, pending.tag);
     // }
-    assert(countDown == 0);
-
-    pending = (pendingRequest){
-        .tag = tag, .procNum = processorNum, .memCallback = callback};
+    assert(q.head == NULL && q.tail == NULL);
 
     // In a real cache simulator, the delay is based
     // on whether the request is a hit or miss.
-    countDown = 2;
+    globalTag = tag;
+    procNum = processorNum;
+    memCallback = callback;
 
     int res1, res2 = 0;
+    unsigned long evict_addr;
 
-    switch(op->op) {
-        case MEM_LOAD:
-            // load first address
-            res1 = load(op->memAddress);
-            if (res1 == 1) {
-                // just miss
-                coherComp->permReq(true, op->memAddress, processorNum);
-            } else if (res1 == 2) {
-                // miss and evict
-                coherComp->invlReq(op->memAddress, processorNum);
-                coherComp->permReq(true, op->memAddress, processorNum);
-            }
+    switch (op->op) {
+    case MEM_LOAD:
+    case MEM_STORE:
+        // load first address
+        ;
+        uint64_t addr = op->memAddress & ~(B - 1);
+        res1 = op->op == MEM_LOAD ? load(addr, &evict_addr, true)
+                                  : store(addr, &evict_addr, true);
+        if (res1 == 1) {
+            // just miss
+            DPRINTF("miss, enqueued %lX\n", addr);
+            enqueueRequest(addr, op->op == MEM_LOAD, PERM, MISS);
+        } else if (res1 == 2) {
+            // miss and evict
+            DPRINTF("miss, enqueued %lX, evicting %lX\n", addr, evict_addr);
 
-            // check if access crosses line boundary
-            if (op->memAddress % L + op->size > L) {
-                // access spans two lines, load the next address as well
-                uint64_t next_addr = (op->memAddress & ~(L - 1)) + L;
-                res2 = load(next_addr);
-                if (res2 == 1) {
-                    // just miss
-                    coherComp->permReq(true, op->memAddress, processorNum);
-                } else if (res2 == 2) {
-                    // miss and evict
-                    coherComp->invlReq(op->memAddress, processorNum);
-                    coherComp->permReq(true, op->memAddress, processorNum);
-                }
-            }
-            break;
-        case MEM_STORE:
-            // store first address
-            res1 = store(op->memAddress);
-            if (res1 == 1) {
-                // just miss
-                coherComp->permReq(false, op->memAddress, processorNum);
-            } else if (res1 == 2) {
-                // miss and evict
-                coherComp->invlReq(op->memAddress, processorNum);
-                coherComp->permReq(false, op->memAddress, processorNum);
-            }
-
-            // check if access crosses line boundary
-            if (op->memAddress % L + op->size > L) {
-                // access spans two lines, store the next address as well
-                uint64_t next_addr = (op->memAddress & ~(L - 1)) + L;
-                res2 = store(next_addr);
-                if (res2 == 1) {
-                    // just miss
-                    coherComp->permReq(false, op->memAddress, processorNum);
-                } else if (res2 == 2) {
-                    // miss and evict
-                    coherComp->invlReq(op->memAddress, processorNum);
-                    coherComp->permReq(false, op->memAddress, processorNum);
-                }
-            }
-            break;
-        case NONE:
-        case BRANCH:
-        case ALU:
-        case ALU_LONG:
-        case END:
+            enqueueRequest(evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
+            enqueueRequest(addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
+        } else if (res1 == 0) {
+            DPRINTF("hit, enqueued %lX\n", addr);
+            enqueueRequest(addr, op->op == MEM_LOAD, PERM, HIT);
+        } else {
             assert(false);
-            break;
+        }
+
+        // check if access crosses line boundary
+        if (op->memAddress % B + op->size > B) {
+            // access spans two lines, load the next address as well
+            uint64_t next_addr = (op->memAddress + B) & ~(B - 1);
+            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, false)
+                                      : store(next_addr, &evict_addr, false);
+            if (res2 == 1) {
+                // just miss
+                DPRINTF("second miss, enqueued %lX\n", next_addr);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
+            } else if (res2 == 2) {
+                // miss but evict -- shouldn't get here because 2nd cache line access of request does not evict
+                assert(false);
+            } else if (res2 == 0) {
+                DPRINTF("hit, enqueued %lX\n", addr);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
+            } else {
+                assert(false);
+            }
+        }
+        break;
+    case NONE:
+    case BRANCH:
+    case ALU:
+    case ALU_LONG:
+    case END:
+        assert(false);
+        break;
     }
 
+    // if no need to access memory
     if (!res1 && !res2) {
-        countDown = 1;
+        DPRINTF("HIT\n");
     }
-    
-    // Tell memory about this request
-    // TODO: only do this if this is a miss
-    // TODO: evictions will also need a call to memory with
-    //  invlReq(addr, procNum) -> true if waiting, false if proceed
-
-    coherComp->permReq(false, op->memAddress, processorNum);
 }
 
-int tick()
-{
+void advancePendingQueue() {
+    // if queue is empty, see if callback is necessary
+    if (q.head == NULL) {
+        if (memCallback != NULL) {
+            memCallback(procNum, globalTag);
+            memCallback = NULL;
+            procNum = -1;
+            globalTag = -1;
+        }
+    }
+    else if (!q.head->isStarted) {
+        q.head->requestType == INV ? handleInvReq() : handlePermReq();
+    }
+}
+
+int tick() {
     // Increment iteration count
     iteration++;
 
     // Advance ticks in the coherence component.
     coherComp->si.tick();
-    
-    if (countDown == 1)
-    {
-        assert(pending.memCallback != NULL);
-        pending.memCallback(pending.procNum, pending.tag);
-    }
+
+    advancePendingQueue();
 
     return 1;
 }
 
-int finish(int outFd)
-{
-    return 0;
-}
+int finish(int outFd) { return 0; }
 
-int destroy(void)
-{
+int destroy(void) {
     // free any internally allocated memory here
     // free main cache
     for (unsigned long i = 0; i < S; i++) {
