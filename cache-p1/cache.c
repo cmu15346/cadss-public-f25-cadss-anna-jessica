@@ -157,10 +157,11 @@ int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
         }
     }
 
+    DPRINTF("set index: %lX\n", addr_set_index);
     if (s == 0) {
         *evict_addr = curr_set[LRU_index].tag << b;
     } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (LRU_index << b);
+        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
     }
 
     DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
@@ -236,11 +237,12 @@ int store(unsigned long addr, unsigned long *evict_addr, bool evict) {
             LRU_index = line_index;
         }
     }
+    DPRINTF("set index: %lX\n", addr_set_index);
     // evict address: translate set index and line number to address
     if (s == 0) {
         *evict_addr = curr_set[LRU_index].tag << b;
     } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (LRU_index << b);
+        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
     }
     DPRINTF("calculated evict address: %lX\n", *evict_addr);
 
