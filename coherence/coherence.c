@@ -20,6 +20,11 @@ uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum);
 uint8_t invlReq(uint64_t addr, int processorNum);
 void registerCacheInterface(void (*callback)(int, int, int64_t));
 
+#define DPRINTF(args...)                                                       \
+    if (CADSS_VERBOSE) {                                                       \
+        printf(args);                                                          \
+    }
+
 coher* init(coher_sim_args* csa)
 {
     int op;
@@ -123,10 +128,10 @@ uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
         case DATA_RECV:
         case INVALIDATE:
         case NO_ACTION:
-            printf("start coherence to cache callabck for addrs  %lX\n", addr);
-            printf("type of callback: %d\n", ca);
+            DPRINTF("start coherence to cache callabck for addrs  %lX\n", addr);
+            DPRINTF("type of callback: %d\n", ca);
             cacheCallback(ca, processorNum, addr);
-            printf("finish coherence to cache callback for addrd %lX\n", addr);
+            DPRINTF("finish coherence to cache callback for addrd %lX\n", addr);
             break;
 
         default:
@@ -153,7 +158,7 @@ uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
 uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
 {
 
-    printf("start permreq for addr %lX, isRead = %d\n", addr, is_read);
+    DPRINTF("start permreq for addr %lX, isRead = %d\n", addr, is_read);
     if (processorNum < 0 || processorNum >= processorCount)
     {
         // ERROR
@@ -193,13 +198,13 @@ uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
 
     setState(addr, processorNum, nextState);
 
-    printf("end permreq for addr %lX, isRead = %d\n", addr, is_read);
+    DPRINTF("end permreq for addr %lX, isRead = %d, permAvail = %d\n", addr, is_read, permAvail);
     return permAvail;
 }
 
 uint8_t invlReq(uint64_t addr, int processorNum)
 {
-    printf("start invReq, addr: %lX\n", addr);
+    DPRINTF("start invReq, addr: %lX\n", addr);
     coherence_states currentState, nextState = INVALID;
     cache_action ca;
     uint8_t flush;
@@ -247,7 +252,7 @@ uint8_t invlReq(uint64_t addr, int processorNum)
     tree_remove(coherStates[processorNum], addr);
 
     // Notify about "permReqOnFlush".
-    printf("end invReq\n");
+    DPRINTF("end invReq\n");
     return flush;
 }
 

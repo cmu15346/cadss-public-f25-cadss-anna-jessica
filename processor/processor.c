@@ -20,6 +20,11 @@ int* pendingMem = NULL;
 int* pendingBranch = NULL;
 int64_t* memOpTag = NULL;
 
+#define DPRINTF(args...)                                                       \
+    if (CADSS_VERBOSE) {                                                       \
+        printf(args);                                                          \
+    }
+
 //
 // init
 //
@@ -83,7 +88,7 @@ int64_t makeTag(int procNum, int64_t baseTag)
 
 void memOpCallback(int procNum, int64_t tag)
 {
-    printf("cache to processor callback\n");
+    DPRINTF("cache to processor callback\n");
     int64_t baseTag = (tag >> 8);
 
     // Is the completed memop one that is pending?
@@ -95,7 +100,7 @@ void memOpCallback(int procNum, int64_t tag)
     }
     else
     {
-        printf("memopTag: %ld != tag %ld\n", memOpTag[procNum], tag);
+        DPRINTF("memopTag: %ld != tag %ld\n", memOpTag[procNum], tag);
     }
 }
 
@@ -110,21 +115,21 @@ int tick(void)
 
     // Pass along to the branch predictor and cache simulator that time ticked
     bs->si.tick();
-    printf("before cache tick\n");
+    DPRINTF("before cache tick\n");
     cs->si.tick();
-    printf("after cache tick\n");
+    DPRINTF("after cache tick\n");
     tickCount++;
 
     if (tickCount == stallCount)
     {
-        printf(
+        DPRINTF(
             "Processor may be stalled.  Now at tick - %ld, last op at %ld\n",
             tickCount, tickCount - STALL_TIME);
         for (int i = 0; i < processorCount; i++)
         {
             if (pendingMem[i] == 1)
             {
-                printf("Processor %d is waiting on memory\n", i);
+                DPRINTF("Processor %d is waiting on memory\n", i);
             }
         }
     }
@@ -160,10 +165,10 @@ int tick(void)
             case MEM_LOAD:
             case MEM_STORE:
                 pendingMem[i] = 1;
-                printf("before memRequest\n");
+                DPRINTF("before memRequest for %lX\n", nextOp->memAddress);
                 cs->memoryRequest(nextOp, i, makeTag(i, memOpTag[i]),
                                   memOpCallback);
-                printf("after memRequest\n");
+                DPRINTF("after memRequest for %lX\n", nextOp->memAddress);
                 break;
 
             case BRANCH:
