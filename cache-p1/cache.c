@@ -46,13 +46,25 @@ void enqueueRequest(int64_t permAddr, bool isLoad, bool isStarted,
     newReq->hasEvict = hasEvict;
     newReq->isHit = isHit;
     newReq->invAddr = invAddr;
+    newReq->next = NULL;
     // push newReq to queue
     if (pending == NULL) {
         pending = newReq;
-        pending->next = NULL;
-    } else {
-        pending->next = newReq;
+        return;
     }
+    struct _pendingRequest *prev = NULL;
+    struct _pendingRequest *cur = pending;
+    while (cur != NULL) {
+        prev = cur;
+        cur = cur->next;
+    }
+    prev->next = newReq;
+    // if (pending == NULL) {
+    //     pending = newReq;
+    //     pending->next = NULL;
+    // } else {
+    //     pending->next = newReq;
+    // }
 }
 
 void memoryRequest(trace_op *op, int processorNum, int64_t tag,
@@ -350,8 +362,10 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
             DPRINTF("miss\n");
             enqueueRequest(addr, op->op == MEM_LOAD, false, true, false,
                            evict_addr);
-        } else {
+        } else if (res1 == 0) {
             enqueueRequest(addr, false, false, false, true, 0);
+        } else {
+            assert(false);
         }
 
         // check if access crosses line boundary
@@ -368,8 +382,10 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                 // miss and evict
                 enqueueRequest(next_addr, op->op == MEM_LOAD, false, true,
                                false, evict_addr);
-            } else {
+            } else if (res2 == 0) {
                 enqueueRequest(next_addr, false, false, false, true, 0);
+            } else {
+                assert(false);
             }
         }
         break;
@@ -404,6 +420,8 @@ int tick() {
             globalTag = -1;
         }
     } else {
+        DPRINTF("address of pending: %p, isHit = %d\n", pending,
+                pending->isHit);
         if (pending->isHit) {
             pendingRequest *temp = pending;
             pending = pending->next;
