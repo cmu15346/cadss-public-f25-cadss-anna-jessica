@@ -408,24 +408,31 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         if (op->memAddress % B + op->size > B) {
             // access spans two lines, load the next address as well
             uint64_t next_addr = (op->memAddress + B) & ~(B - 1);
-            // just send perm request but do absolutely nothing in the actual cache
-            DPRINTF("second req, enqueued %lX\n", next_addr);
-            enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, NA);
-//          res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, false)
-//                                    : store(next_addr, &evict_addr, false);
-//          if (res2 == 1) {
-//              // just miss
-//              DPRINTF("second miss, enqueued %lX\n", next_addr);
-//              enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
-//          } else if (res2 == 2) {
-//              // miss but evict -- shouldn't get here because 2nd cache line access of request does not evict
-//              assert(false);
-//          } else if (res2 == 0) {
-//              DPRINTF("hit, enqueued %lX\n", addr);
-//              enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
-//          } else {
-//              assert(false);
-//          }
+            // if s==0, just send perm request, but don't do anything in the cache because yes...
+            if (s == 0) {
+                DPRINTF("second req, enqueued %lX\n", next_addr);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, NA);
+                break;
+            }
+            
+            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, true)
+                                      : store(next_addr, &evict_addr, true);
+            if (res2 == 1) {
+                // just miss
+                DPRINTF("second miss, enqueued %lX\n", next_addr);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
+            } else if (res2 == 2) {
+                // miss and evict
+                DPRINTF("second miss, enqueued %lX, evicting %lX\n", addr, evict_addr);
+
+                enqueueRequest(evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
+            } else if (res2 == 0) {
+                DPRINTF("hit, enqueued %lX\n", addr);
+                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
+            } else {
+                assert(false);
+            }
         }
         break;
     case NONE:
