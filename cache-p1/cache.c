@@ -12,7 +12,7 @@
         printf(args);                                                          \
     }
 
-typedef enum cacheResult_ { HIT , MISS , MISS_EVICT } cacheResult;
+typedef enum cacheResult_ { HIT , MISS , MISS_EVICT , NA } cacheResult;
 typedef enum reqType_ { PERM , INV } reqType;
 
 typedef struct _pendingRequest {
@@ -408,21 +408,24 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         if (op->memAddress % B + op->size > B) {
             // access spans two lines, load the next address as well
             uint64_t next_addr = (op->memAddress + B) & ~(B - 1);
-            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, false)
-                                      : store(next_addr, &evict_addr, false);
-            if (res2 == 1) {
-                // just miss
-                DPRINTF("second miss, enqueued %lX\n", next_addr);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
-            } else if (res2 == 2) {
-                // miss but evict -- shouldn't get here because 2nd cache line access of request does not evict
-                assert(false);
-            } else if (res2 == 0) {
-                DPRINTF("hit, enqueued %lX\n", addr);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
-            } else {
-                assert(false);
-            }
+            // just send perm request but do absolutely nothing in the actual cache
+            DPRINTF("second req, enqueued %lX\n", next_addr);
+            enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, NA);
+//          res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, false)
+//                                    : store(next_addr, &evict_addr, false);
+//          if (res2 == 1) {
+//              // just miss
+//              DPRINTF("second miss, enqueued %lX\n", next_addr);
+//              enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
+//          } else if (res2 == 2) {
+//              // miss but evict -- shouldn't get here because 2nd cache line access of request does not evict
+//              assert(false);
+//          } else if (res2 == 0) {
+//              DPRINTF("hit, enqueued %lX\n", addr);
+//              enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
+//          } else {
+//              assert(false);
+//          }
         }
         break;
     case NONE:
