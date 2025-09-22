@@ -83,7 +83,7 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t));
 void coherCallback(int type, int procNum, int64_t addr);
 
-unsigned long E, s, b, i, k = 0;
+unsigned long E, s, b, victim_i, k = 0;
 unsigned long S, B = 0;
 unsigned long iteration = 0; // timestamp used for LRU
 
@@ -95,6 +95,226 @@ typedef struct {
 } cache_line;
 
 cache_line **main_cache = NULL;
+// 1d array of cache_lines
+cache_line *victim_cache = NULL;
+
+void assert_set_all_valid(cache_line* set) {
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        assert(set[line_index].valid_bit);
+    }
+}
+
+int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
+    unsigned long addr_set_index, addr_tag;
+    addr_tag = addr >> (s + b);
+    addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
+
+    cache_line *curr_set = main_cache[addr_set_index];
+
+    // Look for MAIN hit
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        if ((curr_set[line_index].tag == addr_tag) &&
+            curr_set[line_index].valid_bit) {
+            // Found tag + valid bit YAY, hit!!
+            // update LRU_counter
+            curr_set[line_index].LRU_counter = iteration;
+            // update dirty bit
+            if (is_store) curr_set[line_index].dirty_bit = true;
+            return 0; // MAIN HIT
+        }
+    }
+
+    // can freely bring into MAIN
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        if (!curr_set[line_index].valid_bit) {
+            // Found invalid bit? - YAY miss
+            // update curr_set[line_index] with values....
+            curr_set[line_index].valid_bit = true;
+            curr_set[line_index].dirty_bit = is_store;
+            curr_set[line_index].tag = addr_tag;
+            curr_set[line_index].LRU_counter = iteration;
+            return 1; // MAIN MISS, VICTIM MISS, no overall evict
+        }
+    }
+
+    // need to evict from MAIN
+    unsigned long LRU_index = 0;
+    unsigned long smallest_LRU = curr_set[0].LRU_counter;
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        if (curr_set[line_index].LRU_counter < smallest_LRU) {
+            smallest_LRU = curr_set[line_index].LRU_counter;
+            LRU_index = line_index;
+        }
+    }
+
+    DPRINTF("set index: %lX\n", addr_set_index);
+    *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
+
+    DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
+
+    // Overwrite the line - YAY miss, evict
+    // Update entry
+    // If that index has dirty bits - we are evicting dirty bits!
+    // since loading, we set dirty bit to false
+    curr_set[LRU_index].dirty_bit = is_store;
+    // update tag and LRU_counter
+    curr_set[LRU_index].tag = addr_tag;
+    curr_set[LRU_index].LRU_counter = iteration;
+
+    return 2; // MISS and EVICT
+}
+
+int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_store) {
+    unsigned long addr_set_index, addr_tag, victim_addr_tag;
+    addr_tag = addr >> (s + b);
+    victim_addr_tag = addr >> b;
+    addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
+
+    cache_line *curr_set = main_cache[addr_set_index];
+
+    // Look for MAIN hit
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        if ((curr_set[line_index].tag == addr_tag) &&
+            curr_set[line_index].valid_bit) {
+            // Found tag + valid bit YAY, hit!!
+            // update LRU_counter
+            curr_set[line_index].LRU_counter = iteration;
+            // update dirty bit
+            if (is_store) curr_set[line_index].dirty_bit = true;
+            return 0; // MAIN HIT
+        }
+    }
+
+    // MAIN miss, Look for VICTIM HIT
+    for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
+        if ((victim_cache[vic_line_index].tag == victim_addr_tag) &&
+            victim_cache[vic_line_index].valid_bit) {
+            // Found tag + valid bit YAY, victim hit!!
+            // update LRU_counter
+            victim_cache[vic_line_index].LRU_counter = iteration;
+            // update dirty bit
+            if (is_store) victim_cache[vic_line_index].dirty_bit = true;
+
+            // swap into main cache (guaranteed corresponding main cache set is full)
+            assert_set_all_valid(curr_set);
+
+            // Find LRU in main cache set
+            unsigned long LRU_index = 0;
+            unsigned long smallest_LRU = curr_set[0].LRU_counter;
+            for (unsigned long line_index = 0; line_index < E; line_index++) {
+                if (curr_set[line_index].LRU_counter < smallest_LRU) {
+                    smallest_LRU = curr_set[line_index].LRU_counter;
+                    LRU_index = line_index;
+                }
+            }
+
+            // make new tags as we are switching cache configurations
+            unsigned long lru_to_victim_tag = (curr_set[LRU_index].tag << s) + addr_set_index;
+            unsigned long victim_to_lru_tag = addr_tag;
+
+            // swap
+            cache_line temp = {0};
+
+            memcpy(&temp, &victim_cache[vic_line_index], sizeof(cache_line));
+            memcpy(&victim_cache[vic_line_index], &curr_set[LRU_index], 
+                    sizeof(cache_line));
+            memcpy(&curr_set[LRU_index], &temp, sizeof(cache_line));
+
+            victim_cache[vic_line_index].tag = lru_to_victim_tag;
+            curr_set[LRU_index].tag = victim_to_lru_tag;
+
+            return 0; // MAIN MISS, VICTIM HIT
+        }
+    }
+
+    // MAIN MISS, VICTIM MISS
+
+    // can freely bring into MAIN
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        if (!curr_set[line_index].valid_bit) {
+            // Found invalid bit? - YAY miss
+            // update curr_set[line_index] with values....
+            curr_set[line_index].valid_bit = true;
+            curr_set[line_index].dirty_bit = is_store;
+            curr_set[line_index].tag = addr_tag;
+            curr_set[line_index].LRU_counter = iteration;
+            return 1; // MAIN MISS, VICTIM MISS, no overall evict
+        }
+    }
+
+    // now we are handling main miss, victim miss, evict from main cache
+    // 2 subcases: victim cache has room OR victim cache needs to evict
+    // if victim cache has room, then no address is reported as evict
+    // if victim cache needs to evict, then evict address is reported
+
+    // need to evict from MAIN
+    unsigned long LRU_index = 0;
+    unsigned long smallest_LRU = curr_set[0].LRU_counter;
+    for (unsigned long line_index = 0; line_index < E; line_index++) {
+        if (curr_set[line_index].LRU_counter < smallest_LRU) {
+            smallest_LRU = curr_set[line_index].LRU_counter;
+            LRU_index = line_index;
+        }
+    }
+
+    // can freely bring into VICTIM
+    for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
+        if (!victim_cache[vic_line_index].valid_bit) {
+            // make new tags as we are switching cache configurations
+            unsigned long lru_to_victim_tag = (curr_set[LRU_index].tag << s) + 
+                                                (addr_set_index);
+
+            // main LRU evict -> victim free spot
+            victim_cache[vic_line_index].valid_bit = true;
+            victim_cache[vic_line_index].dirty_bit = curr_set[LRU_index].dirty_bit;
+            victim_cache[vic_line_index].tag = lru_to_victim_tag;
+            victim_cache[vic_line_index].LRU_counter = curr_set[LRU_index].LRU_counter;
+
+            // new address -> main
+            curr_set[LRU_index].valid_bit = true;
+            curr_set[LRU_index].dirty_bit = is_store;
+            curr_set[LRU_index].tag = addr_tag;
+            curr_set[LRU_index].LRU_counter = iteration;
+            return 1; // MAIN MISS, VICTIM MISS, EVICT FROM MAIN TO VICTIM CACHE, 
+                      // no overall evict, just permreq
+        }
+    }
+
+    // evict from VICTIM
+    unsigned long vic_LRU_index = 0;
+    unsigned long vic_smallest_LRU = victim_cache[0].LRU_counter;
+    for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
+        if (victim_cache[vic_line_index].LRU_counter < vic_smallest_LRU) {
+            vic_smallest_LRU = victim_cache[vic_line_index].LRU_counter;
+            vic_LRU_index = vic_line_index;
+        }
+    }
+
+    // victim cache doesn't have room, evict victim LRU + replace w/ new address info
+    // evict victim LRU -- set evict_addr = victim tag << b
+    // main LRU -> victim LRU -- from before
+    // new address -> main cache -- from before
+    
+    *evict_addr = victim_cache[vic_LRU_index].tag << b;
+
+    // make new tags as we are switching cache configurations
+    unsigned long lru_to_victim_tag = (curr_set[LRU_index].tag << s) + 
+                                        addr_set_index;
+
+    // main LRU evict -> victim LRU spot 
+    victim_cache[vic_LRU_index].valid_bit = true;
+    victim_cache[vic_LRU_index].dirty_bit = curr_set[LRU_index].dirty_bit;
+    victim_cache[vic_LRU_index].tag = lru_to_victim_tag;
+    victim_cache[vic_LRU_index].LRU_counter = curr_set[LRU_index].LRU_counter;
+
+    // new address -> main
+    curr_set[LRU_index].valid_bit = true;
+    curr_set[LRU_index].dirty_bit = is_store;
+    curr_set[LRU_index].tag = addr_tag;
+    curr_set[LRU_index].LRU_counter = iteration;
+
+    return 2; // BOTH MISS, EVICT
+}
 
 /**
  * @brief Simulates a load into the cache
@@ -104,78 +324,8 @@ cache_line **main_cache = NULL;
  *
  * Updates cache with result of load operation using a given address
  */
-int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
-    unsigned long addr_set_index, addr_tag;
-    if (s == 0) {
-        addr_set_index = 0;
-        addr_tag = addr >> b;
-    } else {
-        addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
-        addr_tag = addr >> (s + b);
-    }
-    // DPRINTF("addr as hex: %lX\n", addr);
-    // DPRINTF("set index: %ld, S: %ld\n", addr_set_index, S);
-    cache_line *curr_set = main_cache[addr_set_index];
-
-    // Loop through lines to get matching tag
-    for (unsigned long line_index = 0; line_index < E; line_index++) {
-        if ((curr_set[line_index].tag == addr_tag) &&
-            curr_set[line_index].valid_bit) {
-            // Found tag + valid bit YAY, hit!!
-            // update LRU_counter
-            curr_set[line_index].LRU_counter = iteration;
-            return 0; // HIT
-        }
-    }
-    // Didn't find a tag? Ok need to insert:
-    // Loop again, look for invalid bits
-    for (unsigned long line_index = 0; line_index < E; line_index++) {
-        if (!curr_set[line_index].valid_bit) {
-            // Found invalid bit? - YAY miss
-            // update curr_set[line_index] with values....
-            curr_set[line_index].valid_bit = true;
-            curr_set[line_index].dirty_bit = false;
-            curr_set[line_index].tag = addr_tag;
-            curr_set[line_index].LRU_counter = iteration;
-            return 1; // MISS, no evict
-        }
-    }
-
-    // Skip logic for eviction and storing in cache when evict is false
-    if (!evict) {
-        return 1;
-    }
-
-    // Didn't find invalid bits? - need to evict -- find least recently used
-    // index
-    unsigned long LRU_index = 0;
-    unsigned long smallest_LRU = curr_set[0].LRU_counter;
-    for (unsigned long line_index = 1; line_index < E; line_index++) {
-        if (curr_set[line_index].LRU_counter < smallest_LRU) {
-            smallest_LRU = curr_set[line_index].LRU_counter;
-            LRU_index = line_index;
-        }
-    }
-
-    DPRINTF("set index: %lX\n", addr_set_index);
-    if (s == 0) {
-        *evict_addr = curr_set[LRU_index].tag << b;
-    } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
-    }
-
-    DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
-
-    // Overwrite the line - YAY miss, evict
-    // Update entry
-    // If that index has dirty bits - we are evicting dirty bits!
-    // since loading, we set dirty bit to false
-    curr_set[LRU_index].dirty_bit = false;
-    // update tag and LRU_counter
-    curr_set[LRU_index].tag = addr_tag;
-    curr_set[LRU_index].LRU_counter = iteration;
-
-    return 2; // MISS and EVICT
+int load(unsigned long addr, unsigned long *evict_addr) {
+    victim_i > 0 ? cache_access_victim(addr, evict_addr, false) : cache_access(addr, evict_addr, false);
 }
 
 /**
@@ -185,74 +335,8 @@ int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
  *
  * Updates cache with result of store operation using a given address
  */
-int store(unsigned long addr, unsigned long *evict_addr, bool evict) {
-    unsigned long addr_set_index, addr_tag;
-    if (s == 0) {
-        addr_set_index = 0;
-        addr_tag = addr >> b;
-    } else {
-        addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
-        addr_tag = addr >> (s + b);
-    }
-    cache_line *curr_set = main_cache[addr_set_index];
-
-    // Loop through lines to get matching tag
-    for (unsigned long line_index = 0; line_index < E; line_index++) {
-        if ((curr_set[line_index].tag == addr_tag) &&
-            curr_set[line_index].valid_bit) {
-            // Found tag + valid bit YAY, hit!!
-            // update LRU_counter
-            curr_set[line_index].LRU_counter = iteration;
-            // update dirty bit
-            curr_set[line_index].dirty_bit = true;
-            return 0; // HIT
-        }
-    }
-    // Didn't find a tag? Ok need to insert:
-    // Loop again, look for invalid bits
-    for (unsigned long line_index = 0; line_index < E; line_index++) {
-        if (!curr_set[line_index].valid_bit) {
-            // Found invalid bit? - YAY miss
-            // update curr_set[line_index] with values....
-            curr_set[line_index].valid_bit = true;
-            curr_set[line_index].dirty_bit = true;
-            curr_set[line_index].tag = addr_tag;
-            curr_set[line_index].LRU_counter = iteration;
-            return 1; // MISS, no evict
-        }
-    }
-      
-    // Skip logic for eviction and storing in cache when evict is false
-    if (!evict) {
-        return 1;
-    }
-
-    // Didn't find invalid bits? - need to evict -- find least recently used
-    // index
-    unsigned long LRU_index = 0;
-    unsigned long smallest_LRU = curr_set[0].LRU_counter;
-    for (unsigned long line_index = 1; line_index < E; line_index++) {
-        if (curr_set[line_index].LRU_counter < smallest_LRU) {
-            smallest_LRU = curr_set[line_index].LRU_counter;
-            LRU_index = line_index;
-        }
-    }
-    DPRINTF("set index: %lX\n", addr_set_index);
-    // evict address: translate set index and line number to address
-    if (s == 0) {
-        *evict_addr = curr_set[LRU_index].tag << b;
-    } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
-    }
-    DPRINTF("calculated evict address: %lX\n", *evict_addr);
-
-    // Overwrite the line - YAY miss, evict
-    // If that index has dirty bits - we are evicting dirty bits!
-    // update tag and LRU_counter and make sure dirty_bit is set to true
-    curr_set[LRU_index].dirty_bit = true;
-    curr_set[LRU_index].tag = addr_tag;
-    curr_set[LRU_index].LRU_counter = iteration;
-    return 2; // MISS and EVICT
+int store(unsigned long addr, unsigned long *evict_addr) {
+    victim_i > 0 ? cache_access_victim(addr, evict_addr, true) : cache_access(addr, evict_addr, true);
 }
 
 cache *init(cache_sim_args *csa) {
@@ -280,7 +364,7 @@ cache *init(cache_sim_args *csa) {
 
         // entries in victim cache
         case 'i':
-            i = strtoul(optarg, NULL, 10);
+            victim_i = strtoul(optarg, NULL, 10);
             break;
 
         // bits in a RRIP-based replacement policy
@@ -298,6 +382,9 @@ cache *init(cache_sim_args *csa) {
     for (unsigned long i = 0; i < S; i++) {
         main_cache[i] = (cache_line *)calloc(E, sizeof(cache_line));
     }
+    
+    // create victim cache -- i lines
+    victim_cache = (cache_line *)calloc(victim_i, sizeof(cache_line));
 
     self = malloc(sizeof(cache));
     self->memoryRequest = memoryRequest;
@@ -385,8 +472,8 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         // load first address
         ;
         uint64_t addr = op->memAddress & ~(B - 1);
-        res1 = op->op == MEM_LOAD ? load(addr, &evict_addr, true)
-                                  : store(addr, &evict_addr, true);
+        res1 = op->op == MEM_LOAD ? load(addr, &evict_addr)
+                                  : store(addr, &evict_addr);
         if (res1 == 1) {
             // just miss
             DPRINTF("miss, enqueued %lX\n", addr);
@@ -415,20 +502,20 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                 break;
             }
             
-            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, true)
-                                      : store(next_addr, &evict_addr, true);
+            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr)
+                                      : store(next_addr, &evict_addr);
             if (res2 == 1) {
                 // just miss
                 DPRINTF("second miss, enqueued %lX\n", next_addr);
                 enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
             } else if (res2 == 2) {
                 // miss and evict
-                DPRINTF("second miss, enqueued %lX, evicting %lX\n", addr, evict_addr);
+                DPRINTF("second miss, enqueued %lX, evicting %lX\n", next_addr, evict_addr);
 
                 enqueueRequest(evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
                 enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
             } else if (res2 == 0) {
-                DPRINTF("hit, enqueued %lX\n", addr);
+                DPRINTF("second hit, enqueued %lX\n", next_addr);
                 enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
             } else {
                 assert(false);
@@ -442,11 +529,6 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
     case END:
         assert(false);
         break;
-    }
-
-    // if no need to access memory
-    if (!res1 && !res2) {
-        DPRINTF("HIT\n");
     }
 }
 
