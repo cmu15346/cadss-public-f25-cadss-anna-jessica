@@ -12,8 +12,8 @@
         printf(args);                                                          \
     }
 
-typedef enum cacheResult_ { HIT , MISS , MISS_EVICT , NA } cacheResult;
-typedef enum reqType_ { PERM , INV } reqType;
+typedef enum cacheResult_ { HIT, MISS, MISS_EVICT, NA } cacheResult;
+typedef enum reqType_ { PERM, INV } reqType;
 
 typedef struct _pendingRequest {
     int64_t addr;
@@ -26,8 +26,8 @@ typedef struct _pendingRequest {
 
 // nul terminated so tail points to last node
 typedef struct _pendingQueue {
-    pendingRequest* head;
-    pendingRequest* tail;
+    pendingRequest *head;
+    pendingRequest *tail;
 } pendingQueue;
 
 int64_t globalTag = 0;
@@ -42,22 +42,21 @@ int processorCount = 1;
 int CADSS_VERBOSE = 0;
 pendingQueue q = {0};
 
-void enqueueNode(pendingRequest* node) {
-   if (q.head == NULL) {
-       q.head = node;
-       q.tail = node;
-   } 
-   else {
-       assert(q.tail != NULL);
-       q.tail->next = node;
-       q.tail = node;
-   }
+void enqueueNode(pendingRequest *node) {
+    if (q.head == NULL) {
+        q.head = node;
+        q.tail = node;
+    } else {
+        assert(q.tail != NULL);
+        q.tail->next = node;
+        q.tail = node;
+    }
 }
 
 void dequeueRequest() {
     assert(q.head != NULL && q.tail != NULL);
     DPRINTF("popping from queue\n");
-    pendingRequest* temp = q.head;
+    pendingRequest *temp = q.head;
     if (q.head == q.tail) {
         q.tail = NULL;
     }
@@ -66,8 +65,8 @@ void dequeueRequest() {
     free(temp);
 }
 
-void enqueueRequest(int64_t addr, bool isLoad,
-                    reqType requestType, cacheResult cacheResult) {
+void enqueueRequest(int64_t addr, bool isLoad, reqType requestType,
+                    cacheResult cacheResult) {
     struct _pendingRequest *newReq = malloc(sizeof(struct _pendingRequest));
     // initialize newReq
     newReq->addr = addr;
@@ -84,14 +83,16 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
 void coherCallback(int type, int procNum, int64_t addr);
 
 unsigned long E, s, b, i, k = 0;
-unsigned long S, B = 0;
+unsigned long S, B, R = 0;
 unsigned long iteration = 0; // timestamp used for LRU
+bool is_rrip = false;
 
 typedef struct {
     bool valid_bit;
     bool dirty_bit;
     unsigned long tag;
     size_t LRU_counter;
+    size_t RRPV;
 } cache_line;
 
 cache_line **main_cache = NULL;
@@ -104,7 +105,7 @@ cache_line **main_cache = NULL;
  *
  * Updates cache with result of load operation using a given address
  */
-int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
+int load(unsigned long addr, unsigned long *evict_addr) {
     unsigned long addr_set_index, addr_tag;
     if (s == 0) {
         addr_set_index = 0;
@@ -124,6 +125,8 @@ int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
             // Found tag + valid bit YAY, hit!!
             // update LRU_counter
             curr_set[line_index].LRU_counter = iteration;
+            // update RRPV
+            curr_set[line_index].RRPV = 0;
             return 0; // HIT
         }
     }
@@ -137,31 +140,48 @@ int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
             curr_set[line_index].dirty_bit = false;
             curr_set[line_index].tag = addr_tag;
             curr_set[line_index].LRU_counter = iteration;
+            curr_set[line_index].RRPV = R - 1;
             return 1; // MISS, no evict
         }
     }
 
-    // Skip logic for eviction and storing in cache when evict is false
-    if (!evict) {
-        return 1;
-    }
-
-    // Didn't find invalid bits? - need to evict -- find least recently used
-    // index
-    unsigned long LRU_index = 0;
-    unsigned long smallest_LRU = curr_set[0].LRU_counter;
-    for (unsigned long line_index = 1; line_index < E; line_index++) {
-        if (curr_set[line_index].LRU_counter < smallest_LRU) {
-            smallest_LRU = curr_set[line_index].LRU_counter;
-            LRU_index = line_index;
+    // Didn't find invalid bits? - need to evict
+    unsigned long evict_index = 0;
+    if (is_rrip) {
+        DPRINTF("evicting using RRIP\n");
+        // find first index predicted to be accessed in distant future
+        bool found_evict = false;
+        while (!found_evict) {
+            for (size_t line_index = 0; line_index < E; line_index++) {
+                if (curr_set[line_index].RRPV == R) {
+                    found_evict = true;
+                    evict_index = line_index;
+                    break;
+                }
+            }
+            if (!found_evict) {
+                for (size_t line_index = 0; line_index < E; line_index++) {
+                    curr_set[line_index].RRPV++;
+                }
+            }
+        }
+    } else {
+        // find least recently used index
+        unsigned long smallest_LRU = curr_set[0].LRU_counter;
+        for (unsigned long line_index = 1; line_index < E; line_index++) {
+            if (curr_set[line_index].LRU_counter < smallest_LRU) {
+                smallest_LRU = curr_set[line_index].LRU_counter;
+                evict_index = line_index;
+            }
         }
     }
 
     DPRINTF("set index: %lX\n", addr_set_index);
     if (s == 0) {
-        *evict_addr = curr_set[LRU_index].tag << b;
+        *evict_addr = curr_set[evict_index].tag << b;
     } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
+        *evict_addr =
+            (curr_set[evict_index].tag << (s + b)) + (addr_set_index << b);
     }
 
     DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
@@ -170,11 +190,11 @@ int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
     // Update entry
     // If that index has dirty bits - we are evicting dirty bits!
     // since loading, we set dirty bit to false
-    curr_set[LRU_index].dirty_bit = false;
-    // update tag and LRU_counter
-    curr_set[LRU_index].tag = addr_tag;
-    curr_set[LRU_index].LRU_counter = iteration;
-
+    curr_set[evict_index].dirty_bit = false;
+    // update tag, LRU_counter, and RRPV
+    curr_set[evict_index].tag = addr_tag;
+    curr_set[evict_index].LRU_counter = iteration;
+    curr_set[evict_index].RRPV = R - 1;
     return 2; // MISS and EVICT
 }
 
@@ -185,7 +205,7 @@ int load(unsigned long addr, unsigned long *evict_addr, bool evict) {
  *
  * Updates cache with result of store operation using a given address
  */
-int store(unsigned long addr, unsigned long *evict_addr, bool evict) {
+int store(unsigned long addr, unsigned long *evict_addr) {
     unsigned long addr_set_index, addr_tag;
     if (s == 0) {
         addr_set_index = 0;
@@ -203,6 +223,8 @@ int store(unsigned long addr, unsigned long *evict_addr, bool evict) {
             // Found tag + valid bit YAY, hit!!
             // update LRU_counter
             curr_set[line_index].LRU_counter = iteration;
+            // update RRPV
+            curr_set[line_index].RRPV = 0;
             // update dirty bit
             curr_set[line_index].dirty_bit = true;
             return 0; // HIT
@@ -218,40 +240,60 @@ int store(unsigned long addr, unsigned long *evict_addr, bool evict) {
             curr_set[line_index].dirty_bit = true;
             curr_set[line_index].tag = addr_tag;
             curr_set[line_index].LRU_counter = iteration;
+            curr_set[line_index].RRPV = R - 1;
             return 1; // MISS, no evict
         }
     }
-      
-    // Skip logic for eviction and storing in cache when evict is false
-    if (!evict) {
-        return 1;
-    }
 
-    // Didn't find invalid bits? - need to evict -- find least recently used
-    // index
-    unsigned long LRU_index = 0;
-    unsigned long smallest_LRU = curr_set[0].LRU_counter;
-    for (unsigned long line_index = 1; line_index < E; line_index++) {
-        if (curr_set[line_index].LRU_counter < smallest_LRU) {
-            smallest_LRU = curr_set[line_index].LRU_counter;
-            LRU_index = line_index;
+    // Didn't find invalid bits? - need to evict
+    unsigned long evict_index = 0;
+    if (is_rrip) {
+        DPRINTF("evicting using RRIP\n");
+        // find first index predicted to be accessed in distant future
+        bool found_evict = false;
+        while (!found_evict) {
+            for (size_t line_index = 0; line_index < E; line_index++) {
+                if (curr_set[line_index].RRPV == R) {
+                    found_evict = true;
+                    evict_index = line_index;
+                    break;
+                }
+            }
+            if (!found_evict) {
+                for (size_t line_index = 0; line_index < E; line_index++) {
+                    curr_set[line_index].RRPV++;
+                }
+            }
+        }
+    } else {
+        DPRINTF("evicting using LRU\n");
+        // find least recently used index
+        unsigned long smallest_LRU = curr_set[0].LRU_counter;
+        for (unsigned long line_index = 1; line_index < E; line_index++) {
+            if (curr_set[line_index].LRU_counter < smallest_LRU) {
+                smallest_LRU = curr_set[line_index].LRU_counter;
+                evict_index = line_index;
+            }
         }
     }
+
     DPRINTF("set index: %lX\n", addr_set_index);
     // evict address: translate set index and line number to address
     if (s == 0) {
-        *evict_addr = curr_set[LRU_index].tag << b;
+        *evict_addr = curr_set[evict_index].tag << b;
     } else {
-        *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
+        *evict_addr =
+            (curr_set[evict_index].tag << (s + b)) + (addr_set_index << b);
     }
     DPRINTF("calculated evict address: %lX\n", *evict_addr);
 
     // Overwrite the line - YAY miss, evict
     // If that index has dirty bits - we are evicting dirty bits!
-    // update tag and LRU_counter and make sure dirty_bit is set to true
-    curr_set[LRU_index].dirty_bit = true;
-    curr_set[LRU_index].tag = addr_tag;
-    curr_set[LRU_index].LRU_counter = iteration;
+    // update tag, LRU_counter, and RRPV and make sure dirty_bit is set to true
+    curr_set[evict_index].dirty_bit = true;
+    curr_set[evict_index].tag = addr_tag;
+    curr_set[evict_index].LRU_counter = iteration;
+    curr_set[evict_index].RRPV = R - 1;
     return 2; // MISS and EVICT
 }
 
@@ -275,7 +317,7 @@ cache *init(cache_sim_args *csa) {
         // block size in bits
         case 'b':
             b = strtoul(optarg, NULL, 10);
-            B = 1 << b;
+            B = 1UL << b;
             break;
 
         // entries in victim cache
@@ -286,6 +328,10 @@ cache *init(cache_sim_args *csa) {
         // bits in a RRIP-based replacement policy
         case 'R':
             k = strtoul(optarg, NULL, 10);
+            if (k != 0) {
+                is_rrip = true;
+                R = (1UL << k) - 1;
+            }
             break;
         }
     }
@@ -311,11 +357,10 @@ cache *init(cache_sim_args *csa) {
     return self;
 }
 
-
-// we only call permReq on misses, but what we consider a cache miss might not be a cache miss 
-// according to coherence. in those cases we won't get a callback so we just need to advance 
-// the queue manually ourselves (aka we can't wait for next tick)
-// note this only happens if permReq returns 1
+// we only call permReq on misses, but what we consider a cache miss might not
+// be a cache miss according to coherence. in those cases we won't get a
+// callback so we just need to advance the queue manually ourselves (aka we
+// can't wait for next tick) note this only happens if permReq returns 1
 void handlePermReq() {
     q.head->isStarted = true;
     if (coherComp->permReq(q.head->isLoad, q.head->addr, procNum)) {
@@ -356,7 +401,6 @@ void coherCallback(int type, int procNum, int64_t addr) {
     }
 }
 
-
 void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t)) {
     assert(op != NULL);
@@ -385,8 +429,8 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         // load first address
         ;
         uint64_t addr = op->memAddress & ~(B - 1);
-        res1 = op->op == MEM_LOAD ? load(addr, &evict_addr, true)
-                                  : store(addr, &evict_addr, true);
+        res1 = op->op == MEM_LOAD ? load(addr, &evict_addr)
+                                  : store(addr, &evict_addr);
         if (res1 == 1) {
             // just miss
             DPRINTF("miss, enqueued %lX\n", addr);
@@ -408,22 +452,24 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         if (op->memAddress % B + op->size > B) {
             // access spans two lines, load the next address as well
             uint64_t next_addr = (op->memAddress + B) & ~(B - 1);
-            // if s==0, just send perm request, but don't do anything in the cache because yes...
+            // if s==0, just send perm request, but don't do anything in the
+            // cache because yes...
             if (s == 0) {
                 DPRINTF("second req, enqueued %lX\n", next_addr);
                 enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, NA);
                 break;
             }
-            
-            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr, true)
-                                      : store(next_addr, &evict_addr, true);
+
+            res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr)
+                                      : store(next_addr, &evict_addr);
             if (res2 == 1) {
                 // just miss
                 DPRINTF("second miss, enqueued %lX\n", next_addr);
                 enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
             } else if (res2 == 2) {
                 // miss and evict
-                DPRINTF("second miss, enqueued %lX, evicting %lX\n", addr, evict_addr);
+                DPRINTF("second miss, enqueued %lX, evicting %lX\n", addr,
+                        evict_addr);
 
                 enqueueRequest(evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
                 enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
@@ -459,8 +505,7 @@ void advancePendingQueue() {
             procNum = -1;
             globalTag = -1;
         }
-    }
-    else if (!q.head->isStarted) {
+    } else if (!q.head->isStarted) {
         q.head->requestType == INV ? handleInvReq() : handlePermReq();
     }
 }
