@@ -84,24 +84,60 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
 void coherCallback(int type, int procNum, int64_t addr);
 
 unsigned long E, s, b, victim_i, k = 0;
-unsigned long S, B = 0;
+unsigned long S, B, R = 0;
 unsigned long iteration = 0; // timestamp used for LRU
+bool is_rrip = false;
 
 typedef struct {
     bool valid_bit;
     bool dirty_bit;
     unsigned long tag;
     size_t LRU_counter;
+    size_t RRPV;
 } cache_line;
 
 cache_line **main_cache = NULL;
 // 1d array of cache_lines
 cache_line *victim_cache = NULL;
 
-void assert_set_all_valid(cache_line* set) {
+void assert_set_all_valid(cache_line* set, size_t E) {
     for (unsigned long line_index = 0; line_index < E; line_index++) {
         assert(set[line_index].valid_bit);
     }
+}
+
+size_t find_evict(cache_line* set, size_t E, bool evict_rrip) {
+    // need to evict from MAIN
+    unsigned long evict_index = 0;
+    if (evict_rrip) {
+        assert_set_all_valid(set, E);
+        // find first index predicted to be accessed in distant future
+        bool found_evict = false;
+        while (!found_evict) {
+            for (size_t line_index = 0; line_index < E; line_index++) {
+                assert(set[line_index].RRPV <= R);
+                if (set[line_index].RRPV == R) {
+                    found_evict = true;
+                    evict_index = line_index;
+                    break;
+                }
+            }
+            if (!found_evict) {
+                for (size_t line_index = 0; line_index < E; line_index++) {
+                    set[line_index].RRPV++;
+                }
+            }
+        }
+    } else {
+        unsigned long smallest_LRU = set[0].LRU_counter;
+        for (unsigned long line_index = 1; line_index < E; line_index++) {
+            if (set[line_index].LRU_counter < smallest_LRU) {
+                smallest_LRU = set[line_index].LRU_counter;
+                evict_index = line_index;
+            }
+        }
+    }
+    return evict_index;
 }
 
 int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
@@ -110,6 +146,7 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
     addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
 
     cache_line *curr_set = main_cache[addr_set_index];
+    
 
     // Look for MAIN hit
     for (unsigned long line_index = 0; line_index < E; line_index++) {
@@ -120,6 +157,8 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
             curr_set[line_index].LRU_counter = iteration;
             // update dirty bit
             if (is_store) curr_set[line_index].dirty_bit = true;
+            // update RRPV
+            curr_set[line_index].RRPV = 0;
             return 0; // MAIN HIT
         }
     }
@@ -133,22 +172,16 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
             curr_set[line_index].dirty_bit = is_store;
             curr_set[line_index].tag = addr_tag;
             curr_set[line_index].LRU_counter = iteration;
+            curr_set[line_index].RRPV = R - 1;
             return 1; // MAIN MISS, VICTIM MISS, no overall evict
         }
     }
 
     // need to evict from MAIN
-    unsigned long LRU_index = 0;
-    unsigned long smallest_LRU = curr_set[0].LRU_counter;
-    for (unsigned long line_index = 0; line_index < E; line_index++) {
-        if (curr_set[line_index].LRU_counter < smallest_LRU) {
-            smallest_LRU = curr_set[line_index].LRU_counter;
-            LRU_index = line_index;
-        }
-    }
+    unsigned long evict_index = find_evict(curr_set, E, is_rrip);
 
     DPRINTF("set index: %lX\n", addr_set_index);
-    *evict_addr = (curr_set[LRU_index].tag << (s + b)) + (addr_set_index << b);
+    *evict_addr = (curr_set[evict_index].tag << (s + b)) + (addr_set_index << b);
 
     DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
 
@@ -156,10 +189,12 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
     // Update entry
     // If that index has dirty bits - we are evicting dirty bits!
     // since loading, we set dirty bit to false
-    curr_set[LRU_index].dirty_bit = is_store;
-    // update tag and LRU_counter
-    curr_set[LRU_index].tag = addr_tag;
-    curr_set[LRU_index].LRU_counter = iteration;
+    curr_set[evict_index].valid_bit = true;
+    curr_set[evict_index].dirty_bit = is_store;
+    // update tag and evict_counter
+    curr_set[evict_index].tag = addr_tag;
+    curr_set[evict_index].LRU_counter = iteration;
+    curr_set[evict_index].RRPV = R - 1;
 
     return 2; // MISS and EVICT
 }
@@ -181,6 +216,8 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
             curr_set[line_index].LRU_counter = iteration;
             // update dirty bit
             if (is_store) curr_set[line_index].dirty_bit = true;
+            // update RRPV
+            curr_set[line_index].RRPV = 0;
             return 0; // MAIN HIT
         }
     }
@@ -194,34 +231,29 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
             victim_cache[vic_line_index].LRU_counter = iteration;
             // update dirty bit
             if (is_store) victim_cache[vic_line_index].dirty_bit = true;
+            // update RRPV
+            victim_cache[vic_line_index].RRPV = 0;
 
             // swap into main cache (guaranteed corresponding main cache set is full)
-            assert_set_all_valid(curr_set);
+            assert_set_all_valid(curr_set, E);
 
-            // Find LRU in main cache set
-            unsigned long LRU_index = 0;
-            unsigned long smallest_LRU = curr_set[0].LRU_counter;
-            for (unsigned long line_index = 0; line_index < E; line_index++) {
-                if (curr_set[line_index].LRU_counter < smallest_LRU) {
-                    smallest_LRU = curr_set[line_index].LRU_counter;
-                    LRU_index = line_index;
-                }
-            }
+            // Find evict index in main cache set
+            unsigned long evict_index = find_evict(curr_set, E, is_rrip); 
 
             // make new tags as we are switching cache configurations
-            unsigned long lru_to_victim_tag = (curr_set[LRU_index].tag << s) + addr_set_index;
+            unsigned long lru_to_victim_tag = (curr_set[evict_index].tag << s) + addr_set_index;
             unsigned long victim_to_lru_tag = addr_tag;
 
             // swap
             cache_line temp = {0};
 
             memcpy(&temp, &victim_cache[vic_line_index], sizeof(cache_line));
-            memcpy(&victim_cache[vic_line_index], &curr_set[LRU_index], 
+            memcpy(&victim_cache[vic_line_index], &curr_set[evict_index], 
                     sizeof(cache_line));
-            memcpy(&curr_set[LRU_index], &temp, sizeof(cache_line));
+            memcpy(&curr_set[evict_index], &temp, sizeof(cache_line));
 
             victim_cache[vic_line_index].tag = lru_to_victim_tag;
-            curr_set[LRU_index].tag = victim_to_lru_tag;
+            curr_set[evict_index].tag = victim_to_lru_tag;
 
             return 0; // MAIN MISS, VICTIM HIT
         }
@@ -238,6 +270,7 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
             curr_set[line_index].dirty_bit = is_store;
             curr_set[line_index].tag = addr_tag;
             curr_set[line_index].LRU_counter = iteration;
+            curr_set[line_index].RRPV = R - 1;
             return 1; // MAIN MISS, VICTIM MISS, no overall evict
         }
     }
@@ -248,47 +281,35 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
     // if victim cache needs to evict, then evict address is reported
 
     // need to evict from MAIN
-    unsigned long LRU_index = 0;
-    unsigned long smallest_LRU = curr_set[0].LRU_counter;
-    for (unsigned long line_index = 0; line_index < E; line_index++) {
-        if (curr_set[line_index].LRU_counter < smallest_LRU) {
-            smallest_LRU = curr_set[line_index].LRU_counter;
-            LRU_index = line_index;
-        }
-    }
+    unsigned long evict_index = find_evict(curr_set, E, is_rrip); 
 
     // can freely bring into VICTIM
     for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
         if (!victim_cache[vic_line_index].valid_bit) {
             // make new tags as we are switching cache configurations
-            unsigned long lru_to_victim_tag = (curr_set[LRU_index].tag << s) + 
+            unsigned long lru_to_victim_tag = (curr_set[evict_index].tag << s) + 
                                                 (addr_set_index);
 
             // main LRU evict -> victim free spot
             victim_cache[vic_line_index].valid_bit = true;
-            victim_cache[vic_line_index].dirty_bit = curr_set[LRU_index].dirty_bit;
+            victim_cache[vic_line_index].dirty_bit = curr_set[evict_index].dirty_bit;
             victim_cache[vic_line_index].tag = lru_to_victim_tag;
-            victim_cache[vic_line_index].LRU_counter = curr_set[LRU_index].LRU_counter;
+            victim_cache[vic_line_index].LRU_counter = curr_set[evict_index].LRU_counter;
+            victim_cache[vic_line_index].RRPV = curr_set[evict_index].RRPV;
 
             // new address -> main
-            curr_set[LRU_index].valid_bit = true;
-            curr_set[LRU_index].dirty_bit = is_store;
-            curr_set[LRU_index].tag = addr_tag;
-            curr_set[LRU_index].LRU_counter = iteration;
+            curr_set[evict_index].valid_bit = true;
+            curr_set[evict_index].dirty_bit = is_store;
+            curr_set[evict_index].tag = addr_tag;
+            curr_set[evict_index].LRU_counter = iteration;
+            curr_set[evict_index].RRPV = R - 1;
             return 1; // MAIN MISS, VICTIM MISS, EVICT FROM MAIN TO VICTIM CACHE, 
                       // no overall evict, just permreq
         }
     }
 
     // evict from VICTIM
-    unsigned long vic_LRU_index = 0;
-    unsigned long vic_smallest_LRU = victim_cache[0].LRU_counter;
-    for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
-        if (victim_cache[vic_line_index].LRU_counter < vic_smallest_LRU) {
-            vic_smallest_LRU = victim_cache[vic_line_index].LRU_counter;
-            vic_LRU_index = vic_line_index;
-        }
-    }
+    unsigned long vic_LRU_index = find_evict(victim_cache, victim_i, false);
 
     // victim cache doesn't have room, evict victim LRU + replace w/ new address info
     // evict victim LRU -- set evict_addr = victim tag << b
@@ -298,20 +319,22 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
     *evict_addr = victim_cache[vic_LRU_index].tag << b;
 
     // make new tags as we are switching cache configurations
-    unsigned long lru_to_victim_tag = (curr_set[LRU_index].tag << s) + 
+    unsigned long lru_to_victim_tag = (curr_set[evict_index].tag << s) + 
                                         addr_set_index;
 
     // main LRU evict -> victim LRU spot 
     victim_cache[vic_LRU_index].valid_bit = true;
-    victim_cache[vic_LRU_index].dirty_bit = curr_set[LRU_index].dirty_bit;
+    victim_cache[vic_LRU_index].dirty_bit = curr_set[evict_index].dirty_bit;
     victim_cache[vic_LRU_index].tag = lru_to_victim_tag;
-    victim_cache[vic_LRU_index].LRU_counter = curr_set[LRU_index].LRU_counter;
+    victim_cache[vic_LRU_index].LRU_counter = curr_set[evict_index].LRU_counter;
+    victim_cache[vic_LRU_index].RRPV = curr_set[evict_index].RRPV;
 
     // new address -> main
-    curr_set[LRU_index].valid_bit = true;
-    curr_set[LRU_index].dirty_bit = is_store;
-    curr_set[LRU_index].tag = addr_tag;
-    curr_set[LRU_index].LRU_counter = iteration;
+    curr_set[evict_index].valid_bit = true;
+    curr_set[evict_index].dirty_bit = is_store;
+    curr_set[evict_index].tag = addr_tag;
+    curr_set[evict_index].LRU_counter = iteration;
+    curr_set[evict_index].RRPV = R - 1;
 
     return 2; // BOTH MISS, EVICT
 }
@@ -370,6 +393,10 @@ cache *init(cache_sim_args *csa) {
         // bits in a RRIP-based replacement policy
         case 'R':
             k = strtoul(optarg, NULL, 10);
+            if (k != 0) {
+                is_rrip = true;
+                R = (1UL << k) - 1;
+            }
             break;
         }
     }
@@ -568,6 +595,7 @@ int destroy(void) {
         free(main_cache[i]);
     }
     free(main_cache);
+    free(victim_cache);
 
     return 0;
 }
