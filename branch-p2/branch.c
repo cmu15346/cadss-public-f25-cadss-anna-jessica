@@ -63,7 +63,7 @@ branch *init(branch_sim_args *csa) {
         }
     }
 
-    MAX_TAG = g == GSELECT ? 1 << (s + b) : 1 << s;
+    MAX_TAG = 1 << s;
 
     // initialize branch target buffer
     BTB = calloc(MAX_TAG, sizeof(BTB_entry *));
@@ -93,8 +93,8 @@ uint64_t predictBranch(uint64_t pcAddress, uint64_t outcomeAddress) {
         // XOR tag with BHR
         tag ^= BHR;
     } else if (g == GSELECT) {
-        // concatenate tag with BHR
-        tag |= (BHR << s);
+        // TODO: concatenate tag with BHR
+        // tag |= (BHR << s);
     }
 
     // compute prediction from counter
@@ -152,10 +152,12 @@ uint64_t branchRequest(trace_op *op, int processorNum) {
     switch (g) {
     case DEFAULT:
     case GSHARE:
+    case GSELECT:
         predAddress = predictBranch(pcAddress, outcomeAddress);
         break;
     case YEH_PATT:
         DPRINTF("Yeh-Patt model is unimplemented\n");
+        predAddress = predictBranch(pcAddress, outcomeAddress);
         break;
     }
 
