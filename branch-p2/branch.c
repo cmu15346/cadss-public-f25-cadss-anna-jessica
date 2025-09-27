@@ -10,7 +10,7 @@
 #define DPRINTF(args...)                                                       \
     if (CADSS_VERBOSE) {                                                       \
         printf(args);                                                          \
-    };
+    }
 
 // branch target buffer
 typedef struct BTB_entry_ {
@@ -18,12 +18,12 @@ typedef struct BTB_entry_ {
     uint64_t targetAddress;
 } BTB_entry;
 BTB_entry **BTB = NULL;
-size_t BTB_size = 0;
 
-// pattern history table
-uint8_t *PHT = NULL;
+// two-bit counters array
+uint8_t *counter = NULL;
 
 uint64_t p, s, b, g = 0;
+size_t MAX_TAG = 0;
 enum BRANCH_MODEL_TYPE branch_model = DEFAULT;
 
 branch *self = NULL;
@@ -44,7 +44,7 @@ branch *init(branch_sim_args *csa) {
         // predictor size
         case 's':
             s = strtoul(optarg, NULL, 10);
-            BTB_size = 1 << s;
+            MAX_TAG = 1 << s;
             break;
 
         // BHR size
@@ -71,10 +71,13 @@ branch *init(branch_sim_args *csa) {
     }
 
     // initialize branch target buffer
-    BTB = calloc(BTB_size, sizeof(BTB_entry *));
+    BTB = calloc(MAX_TAG, sizeof(BTB_entry *));
 
     // initialize pattern history table
-    PHT = calloc(1 << sizeof(uint64_t), sizeof(uint8_t));
+    counter = calloc(MAX_TAG, sizeof(uint8_t));
+    for (size_t i = 0; i < MAX_TAG; i++) {
+        counter[i] = 1;
+    }
 
     self = malloc(sizeof(branch));
     self->branchRequest = branchRequest;
@@ -89,33 +92,35 @@ branch *init(branch_sim_args *csa) {
 uint64_t predict_default(uint64_t pcAddress, uint64_t outcomeAddress) {
     uint64_t predAddress = pcAddress + 4;
 
-    uint64_t tag = (pcAddress >> 3) & ((1 << s) - 1);
+    uint64_t tag = (pcAddress >> 3) & (MAX_TAG - 1);
 
     // compute prediction from PHT counter
-    if (PHT[pcAddress] >= 2) {
+    if (counter[tag] >= 2) {
         // predictor takes the branch
-        assert(BTB[tag] != NULL);
+        // assert(BTB[tag] != NULL);
         predAddress = BTB[tag]->targetAddress;
     }
+
+    DPRINTF("B(0x%lx) has predict state %d, predicting 0x%lx, actual 0x%lx\n", pcAddress, counter[tag], predAddress, outcomeAddress);
 
     // update PHT and BTB based on actual outcome
     if (outcomeAddress == pcAddress + 4) {
         // did not actually take branch, decrement counter
-        if (PHT[pcAddress] > 0) {
-            PHT[pcAddress]--;
+        if (counter[tag] > 0) {
+            counter[tag]--;
         }
     } else {
         // actually took branch, increment counter
-        if (PHT[pcAddress] < 4) {
-            PHT[pcAddress]++;
+        if (counter[tag] < 3) {
+            counter[tag]++;
         }
 
         // store jump address in BTB
         if (BTB[tag] == NULL) {
             BTB[tag] = malloc(sizeof(BTB_entry));
-            BTB[tag]->tag = tag;
-            BTB[tag]->targetAddress = outcomeAddress;
         }
+        BTB[tag]->tag = tag;
+        BTB[tag]->targetAddress = outcomeAddress;
     }
 
     return predAddress;
@@ -160,9 +165,10 @@ uint64_t branchRequest(trace_op *op, int processorNum) {
 
     case YEH_PATT:
         DPRINTF("Yeh-Patt model is unimplemented\n");
-        assert(false);
         break;
     }
+
+    DPRINTF("Branch %lx -> %lx\n", pcAddress, predAddress);
 
     return predAddress;
 }
@@ -173,10 +179,10 @@ int finish(int outFd) { return 0; }
 
 int destroy(void) {
     // free any internally allocated memory here
-    for (size_t i = 0; i < BTB_size; i++) {
+    for (size_t i = 0; i < MAX_TAG; i++) {
         free(BTB[i]);
     }
     free(BTB);
-    free(PHT);
+    free(counter);
     return 0;
 }
