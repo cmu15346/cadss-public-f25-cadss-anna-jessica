@@ -12,6 +12,9 @@
         printf(args);                                                          \
     }
 
+// command-line args
+uint64_t p, s, b, g = 0;
+
 // branch target buffer
 typedef struct BTB_entry_ {
     uint64_t tag;
@@ -22,9 +25,11 @@ BTB_entry **BTB = NULL;
 // two-bit counters array
 uint8_t *counter = NULL;
 
-uint64_t p, s, b, g = 0;
-size_t MAX_TAG = 0;
-enum BRANCH_MODEL_TYPE branch_model = DEFAULT;
+// size of BTB and counter array
+uint64_t MAX_TAG = 0;
+
+// branch history register
+uint64_t BHR = 0;
 
 branch *self = NULL;
 
@@ -44,7 +49,6 @@ branch *init(branch_sim_args *csa) {
         // predictor size
         case 's':
             s = strtoul(optarg, NULL, 10);
-            MAX_TAG = 1 << s;
             break;
 
         // BHR size
@@ -55,27 +59,18 @@ branch *init(branch_sim_args *csa) {
         // predictor model
         case 'g':
             g = strtoul(optarg, NULL, 10);
-            if (g == 0) {
-                branch_model = DEFAULT;
-            } else if (g == 1) {
-                branch_model = GSHARE;
-            } else if (g == 2) {
-                branch_model = GSELECT;
-            } else if (g == 3) {
-                branch_model = YEH_PATT;
-            } else {
-                assert(false);
-            }
             break;
         }
     }
+
+    MAX_TAG = g == GSELECT ? 1 << (s + b) : 1 << s;
 
     // initialize branch target buffer
     BTB = calloc(MAX_TAG, sizeof(BTB_entry *));
 
     // initialize pattern history table
     counter = calloc(MAX_TAG, sizeof(uint8_t));
-    for (size_t i = 0; i < MAX_TAG; i++) {
+    for (uint64_t i = 0; i < MAX_TAG; i++) {
         counter[i] = 1;
     }
 
@@ -89,21 +84,30 @@ branch *init(branch_sim_args *csa) {
 }
 
 // default 2-bit counter prediction model
-uint64_t predict_default(uint64_t pcAddress, uint64_t outcomeAddress) {
+uint64_t predictBranch(uint64_t pcAddress, uint64_t outcomeAddress) {
     uint64_t predAddress = pcAddress + 4;
 
+    // compute tag
     uint64_t tag = (pcAddress >> 3) & (MAX_TAG - 1);
+    if (g == GSHARE) {
+        // XOR tag with BHR
+        tag ^= BHR;
+    } else if (g == GSELECT) {
+        // concatenate tag with BHR
+        tag |= (BHR << s);
+    }
 
-    // compute prediction from PHT counter
+    // compute prediction from counter
     if (counter[tag] >= 2) {
         // predictor takes the branch
-        // assert(BTB[tag] != NULL);
+        assert(BTB[tag] != NULL);
         predAddress = BTB[tag]->targetAddress;
     }
 
-    DPRINTF("B(0x%lx) has predict state %d, predicting 0x%lx, actual 0x%lx\n", pcAddress, counter[tag], predAddress, outcomeAddress);
+    DPRINTF("B(0x%lx) has predict state %d, predicting 0x%lx, actual 0x%lx\n",
+            pcAddress, counter[tag], predAddress, outcomeAddress);
 
-    // update PHT and BTB based on actual outcome
+    // update counter and BTB based on actual outcome
     if (outcomeAddress == pcAddress + 4) {
         // did not actually take branch, decrement counter
         if (counter[tag] > 0) {
@@ -123,15 +127,10 @@ uint64_t predict_default(uint64_t pcAddress, uint64_t outcomeAddress) {
         BTB[tag]->targetAddress = outcomeAddress;
     }
 
-    return predAddress;
-}
-
-// gshare/gselect prediction model
-uint64_t predict_gmodel(uint64_t pcAddress, uint64_t outcomeAddress,
-                        bool isGshare) {
-    uint64_t predAddress = pcAddress + 4;
-
-    // TODO: compute 2-bit prediction based on BTB
+    if (g == GSHARE || g == GSELECT) {
+        // update branch history register based on actual outcome
+        BHR = ((BHR << 1) & ~(1 << b)) | (outcomeAddress != pcAddress + 4);
+    }
 
     return predAddress;
 }
@@ -150,19 +149,11 @@ uint64_t branchRequest(trace_op *op, int processorNum) {
     //   its state after computing the prediction.
 
     // compute branch prediction
-    switch (branch_model) {
+    switch (g) {
     case DEFAULT:
-        predAddress = predict_default(pcAddress, outcomeAddress);
-        break;
-
     case GSHARE:
-        predAddress = predict_gmodel(pcAddress, outcomeAddress, true);
+        predAddress = predictBranch(pcAddress, outcomeAddress);
         break;
-
-    case GSELECT:
-        predAddress = predict_gmodel(pcAddress, outcomeAddress, false);
-        break;
-
     case YEH_PATT:
         DPRINTF("Yeh-Patt model is unimplemented\n");
         break;
@@ -179,7 +170,7 @@ int finish(int outFd) { return 0; }
 
 int destroy(void) {
     // free any internally allocated memory here
-    for (size_t i = 0; i < MAX_TAG; i++) {
+    for (uint64_t i = 0; i < MAX_TAG; i++) {
         free(BTB[i]);
     }
     free(BTB);
