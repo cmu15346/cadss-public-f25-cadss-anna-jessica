@@ -10,6 +10,8 @@ set(CMAKE_C_FLAGS "-O2 -ggdb -DDEBUG")
 
 add_subdirectory(branch)
 add_subdirectory(branchCPP)
+add_subdirectory(branch-p2)
+add_subdirectory(cache)
 add_subdirectory(cache-p1)
 add_subdirectory(engine)
 add_subdirectory(trace)
