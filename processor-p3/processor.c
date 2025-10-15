@@ -17,6 +17,9 @@
 // command-line args
 uint64_t F, D, M, J, K, C = 0;
 
+// unique tag counter
+uint64_t counter = 0;
+
 typedef struct reg_ {
     bool ready;
     uint32_t tag;
@@ -82,7 +85,7 @@ instr_queue *decode_queue = NULL;
 instr_queue *dispatch_queue = NULL;
 instr_queue *long_schedule_queue = NULL;
 instr_queue *fast_schedule_queue = NULL;
-instr_queue *state_update_queue = NULL;
+instr_queue *state_update_queue = NULL; // priority queue based on tag
 
 trace_reader *tr = NULL;
 cache *cs = NULL;
@@ -171,6 +174,22 @@ instr *queue_pop(instr_queue *q) {
     free(node);
     q->cnt--;
     return ret;
+}
+
+instr *queue_peek(instr_queue *q) {
+    if (queue_empty(q)) {
+        return NULL;
+    }
+    return q->head->instr;
+}
+
+int find_CDB_by_tag(uint32_t tag) {
+    for (int i = 0; i < C; i++) {
+        if (buses[i].tag == tag) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 //
@@ -296,6 +315,16 @@ int tick(void) {
             continue;
         }
 
+        // schedule b: mark indep instructions in schedule queue to fire
+        instr_node *cur_node = long_schedule_queue->head;
+        while (cur_node != NULL) {
+            instr *RS = cur_node->instr;
+
+            // TODO: wakeup schedule b
+
+            cur_node = cur_node->next;
+        }
+
         // instruction move (decode_queue -> dispatch_queue)
         int fetch_cnt = 0;
         while (!queue_empty(decode_queue) && !queue_full(dispatch_queue) &&
@@ -306,12 +335,55 @@ int tick(void) {
             progress = 1;
         }
 
-        // TODO: dispatch unit reserves slots in scheduling queues
+        // dispatch unit reserves slots in scheduling queues
+        while (!queue_empty(dispatch_queue)) {
+            instr *cur_instr = queue_peek(dispatch_queue);
+            // a: add I to first free slot of schedule queue
+            if (cur_instr->is_long) {
+                if (queue_full(long_schedule_queue))
+                    break;
+                // dispatch if schedule queue not full
+                queue_push(long_schedule_queue, cur_instr);
+            } else {
+                if (queue_full(fast_schedule_queue))
+                    break;
+                // dispatch if schedule queue not full
+                queue_push(fast_schedule_queue, cur_instr);
+            }
+            // b: delete I from dispatch queue
+            queue_pop(dispatch_queue);
+
+            // TODO: do we need to move e-f into its own loop?
+            // e: for all src registers i of I, do:
+            for (int i = 0; i < 2; i++) {
+                reg *src = cur_instr->src_arr[i];
+
+                if (src == NULL)
+                    continue;
+
+                if (regs[src->reg_id].ready) {
+                    cur_instr->src_arr[i]->val = regs[src->reg_id].val;
+                    cur_instr->src_arr[i]->ready = true;
+                } else {
+                    cur_instr->src_arr[i]->tag = regs[src->reg_id].tag;
+                    cur_instr->src_arr[i]->ready = false;
+                }
+            }
+
+            // f-g: tag the destination
+            regs[cur_instr->dest].tag = counter;
+            cur_instr->tag = regs[cur_instr->dest].tag;
+            counter++;
+            // h: set register unready, will be ready once execution completes
+            regs[cur_instr->dest].ready = false;
+
+            progress = 1;
+        }
 
         // instruction fetch (read into decode queue)
         for (uint64_t f = 0; f < F; f++) {
 
-            // TODO: get and manage ops for each processor core
+            // get and manage ops for each processor core
             nextOp = tr->getNextOp(i);
 
             if (nextOp == NULL)
@@ -334,15 +406,36 @@ int tick(void) {
                 break;
 
             case ALU:
-            case ALU_LONG:
-                ;
-                instr *new_instr = init_instr(nextOp->op == ALU_LONG, nextOp->dest_reg, nextOp->src_reg);
+            case ALU_LONG:;
+                instr *new_instr = init_instr(
+                    nextOp->op == ALU_LONG, nextOp->dest_reg, nextOp->src_reg);
                 queue_push(decode_queue, new_instr);
 
                 break;
             }
 
             free(nextOp);
+        }
+
+        // schedule a: scheduling queues updated from result buses
+        cur_node = long_schedule_queue->head;
+        while (cur_node != NULL) {
+            instr *RS = cur_node->instr;
+
+            for (int i = 0; i < 2; i++) {
+                reg *src = RS->src_arr[i];
+
+                if (src == NULL)
+                    continue;
+
+                int CDB = find_CDB_by_tag(src->tag);
+                if (CDB != -1) {
+                    src->ready = true;
+                    src->val = buses[CDB].val;
+                }
+            }
+
+            cur_node = cur_node->next;
         }
     }
 
