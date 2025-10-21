@@ -303,6 +303,8 @@ processor *init(processor_sim_args *psa) {
     return self;
 }
 
+int64_t instrCount = 0;
+
 const int64_t STALL_TIME = 100000;
 int64_t tickCount = 0;
 int64_t stallCount = -1;
@@ -322,6 +324,13 @@ void memOpCallback(int procNum, int64_t tag) {
     } else {
         printf("memopTag: %ld != tag %ld\n", memOpTag[procNum], tag);
     }
+}
+
+void print_stats() {
+    double avg = tickCount == 0 ? 0 : (double) instrCount / (double) tickCount;
+    printf("Average number of instructions fired per cycle: %f\n", avg);
+    printf("Total number of instructions: %ld\n", instrCount);
+    printf("Total simulation run-time in number of cycles: %ld\n", tickCount);
 }
 
 int tick(void) {
@@ -583,6 +592,7 @@ int tick(void) {
 
             DPRINTF("progress = 1 instruction\n");
             progress = 1;
+            instrCount++;
 
             switch (nextOp->op) {
 //          case MEM_LOAD:
@@ -627,6 +637,10 @@ int tick(void) {
                 free(del_instr);
             }
         }
+    }
+
+    if (progress == 0) {
+        print_stats();
     }
 
 //  printf("progress: %d, ticks... %ld\n", progress, tickCount);
