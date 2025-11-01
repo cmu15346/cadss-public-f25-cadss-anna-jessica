@@ -622,6 +622,7 @@ void advanceQueue() {
     // if queue is empty, see if callback is necessary
     if (q->head == NULL) {
         if (q->memCallback != NULL) {
+            printf("cache called mem callback\n");
             q->memCallback(procNum, q->requestTag);
             memReqQueue.head = q->next; // moves on to the next memory request
             free(q);
