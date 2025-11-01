@@ -476,6 +476,8 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
     assert(op != NULL);
     assert(callback != NULL);
 
+    printf("called memoryReq\n");
+
     // Simple model to only have one outstanding memory operation
     // if (countDown != 0)
     // {

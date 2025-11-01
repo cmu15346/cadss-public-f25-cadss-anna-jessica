@@ -162,6 +162,11 @@ uint64_t branchRequest(trace_op *op, int processorNum) {
     }
 
     DPRINTF("Branch %lx -> %lx\n", pcAddress, predAddress);
+    if (predAddress == outcomeAddress) {
+        printf("correct prediction\n");
+    } else {
+        printf("mispredict\n");
+    }
 
     return predAddress;
 }
