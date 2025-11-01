@@ -391,8 +391,6 @@ int tick(void) {
                 buses[c].reg_id = I->dest;
                 // Scoreboard[FU].busy = false already done by setting
                 // FU_pipeline[j][0] null
-            } else if (I->op_typ == 1) {
-                pendingBranch[i] = 0;
             }
 
             // mark as completed
@@ -655,6 +653,10 @@ int tick(void) {
             if (del_instr != NULL) {
                 DPRINTF("progress = 1 su f\n");
                 progress = 1;
+
+                if (del_instr->op_typ == 1) {
+                    pendingBranch[i] = 0;
+                }
                 instr_queue *q = del_instr->is_long ? long_schedule_queue
                                                     : fast_schedule_queue;
                 assert(queue_delete(q, del_instr));
