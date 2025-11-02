@@ -107,10 +107,12 @@ int processorCount = 1;
 int CADSS_VERBOSE = 0;
 
 int *pendingBranch = NULL;
-int **pendingMem = NULL;   // 2d array of size processorCount * J
-int64_t **memOpTag = NULL; // 2d array of size processorCount * J
+// int **pendingMem = NULL;   // 2d array of size processorCount * J
+// int64_t **memOpTag = NULL; // 2d array of size processorCount * J
+int *pendingMem = NULL;
+int64_t *memOpTag = NULL;
 int64_t globalTag = 1;
-int pendingCallbacks = 0;
+// int pendingCallbacks = 0;
 
 bool queue_full(instr_queue *q) { return q->cnt == q->cap; }
 
@@ -302,14 +304,16 @@ processor *init(processor_sim_args *psa) {
     state_update_queue = init_queue(UINT32_MAX);
 
     pendingBranch = calloc(processorCount, sizeof(int));
-    pendingMem = calloc(processorCount, sizeof(int *));
-    for (int i = 0; i < processorCount; i++) {
-        pendingMem[i] = calloc(J, sizeof(int));
-    }
-    memOpTag = calloc(processorCount, sizeof(int64_t *));
-    for (int i = 0; i < processorCount; i++) {
-        memOpTag[i] = calloc(J, sizeof(int));
-    }
+    pendingMem = calloc(processorCount, sizeof(int));
+    memOpTag = calloc(processorCount, sizeof(int64_t));
+    // pendingMem = calloc(processorCount, sizeof(int *));
+    // for (int i = 0; i < processorCount; i++) {
+    //     pendingMem[i] = calloc(J, sizeof(int));
+    // }
+    // memOpTag = calloc(processorCount, sizeof(int64_t *));
+    // for (int i = 0; i < processorCount; i++) {
+    //     memOpTag[i] = calloc(J, sizeof(int));
+    // }
 
     self = calloc(1, sizeof(processor));
     return self;
@@ -330,30 +334,31 @@ void memOpCallback(int procNum, int64_t tag) {
     DPRINTF("received memopcallback with tag %ld\n", tag);
 
     // Is the completed memop one that is pending?
-    for (int j = 0; j < J; j++) {
-        if (tag == memOpTag[procNum][j]) {
-            printf("completed memop tagged %ld\n", tag);
-            pendingMem[procNum][j] = 0;
-            memOpTag[procNum][j] = 0;
-            pendingCallbacks--;
-            return;
-        }
-    }
-    // if (baseTag == memOpTag[procNum]) {
-    //     memOpTag[procNum]++;
-    //     pendingMem[procNum] = 0;
-    //     /* stallCount = tickCount + STALL_TIME; */
-    // } else {
-    //     printf("memopTag: %ld != tag %ld\n", memOpTag[procNum], tag);
+    // for (int j = 0; j < J; j++) {
+    //     if (tag == memOpTag[procNum][j]) {
+    //         DPRINTF("completed memop tagged %ld\n", tag);
+    //         pendingMem[procNum][j] = 0;
+    //         memOpTag[procNum][j] = 0;
+    //         pendingCallbacks--;
+    //         return;
+    //     }
     // }
-    printf("memopTag: %ld matched no FU tags\n", tag);
+    if (tag == memOpTag[procNum]) {
+        // memOpTag[procNum]++;
+        pendingMem[procNum] = 0;
+        memOpTag[procNum] = 0;
+        /* stallCount = tickCount + STALL_TIME; */
+    } else {
+        DPRINTF("memopTag: %ld != tag %ld\n", memOpTag[procNum], tag);
+    }
+    // DPRINTF("memopTag: %ld matched no FU tags\n", tag);
 }
 
 void print_stats() {
     double avg = tickCount == 0 ? 0 : (double)instrCount / (double)tickCount;
-    printf("Average number of instructions fired per cycle: %f\n", avg);
-    printf("Total number of instructions: %ld\n", instrCount);
-    printf("Total simulation run-time in number of cycles: %ld\n", tickCount);
+    DPRINTF("Average number of instructions fired per cycle: %f\n", avg);
+    DPRINTF("Total number of instructions: %ld\n", instrCount);
+    DPRINTF("Total simulation run-time in number of cycles: %ld\n", tickCount);
 }
 
 int tick(void) {
@@ -362,8 +367,8 @@ int tick(void) {
     //   each tick until it reaches a branch or memory op
     //   then it blocks on that op
 
-    printf("\n\n-- START TICK %ld --\n\n", tickCount);
-    printf("waiting for %d callbacks\n", pendingCallbacks);
+    DPRINTF("\n\n-- START TICK %ld --\n\n", tickCount);
+    // DPRINTF("waiting for %d callbacks\n", pendingCallbacks);
 
     trace_op *nextOp = NULL;
 
@@ -373,9 +378,9 @@ int tick(void) {
     tickCount++;
     /*
         if (tickCount == stallCount) {
-            printf("Processor may be stalled.  Now at tick - %ld, last op at
+            DPRINTF("Processor may be stalled.  Now at tick - %ld, last op at
        %ld\n", tickCount, tickCount - STALL_TIME); for (int i = 0; i <
-       processorCount; i++) { if (pendingMem[i] == 1) { printf("Processor %d is
+       processorCount; i++) { if (pendingMem[i] == 1) { DPRINTF("Processor %d is
        waiting on memory\n", i);
                 }
             }
@@ -408,7 +413,7 @@ int tick(void) {
             if (queue_empty(state_update_queue))
                 break;
             instr *I = queue_pop(state_update_queue);
-            if (I->op_typ == -1) { // regular ALU or ALU_LONG instr
+            if (I->op_typ != 1) { // ALU or mem instr
                 buses[c].busy = true;
                 buses[c].tag = I->tag;
                 // TODO: replace DUMMY VALUE? or ok?
@@ -420,7 +425,9 @@ int tick(void) {
 
             // mark as completed
             completed[c] = I;
-            DPRINTF("progress = 1 SU a-e, %p\n", I);
+            DPRINTF("progress = 1 SU a-e, %lx\n", I->op_typ == 0
+                                                      ? I->trace_op->memAddress
+                                                      : I->trace_op->pcAddress);
             progress = 1;
         }
 
@@ -442,8 +449,10 @@ int tick(void) {
             // fast
             if (j < J) {
                 to_queue = FU_pipeline[j][0];
-                if (to_queue != NULL && to_queue->op_typ == 0 && pendingMem[i][j] != 0) {
-                    printf("stalling ALU execution pipeline because pendingMem\n");
+                if (to_queue != NULL && to_queue->op_typ == 0 &&
+                    pendingMem[i] != 0) {
+                    DPRINTF(
+                        "stalling ALU execution pipeline because pendingMem\n");
                     // stall pipeline if instr is pending memrequest
                     continue;
                 }
@@ -459,8 +468,9 @@ int tick(void) {
             // put completed instructions in state_update_queue
             //          DPRINTF("to_queue: %p\n", to_queue);
             if (to_queue != NULL) {
-                DPRINTF("priority push %p into state update quueue\n",
-                        to_queue);
+                DPRINTF("priority push %lx into state update quueue\n",
+                        to_queue->op_typ == 0 ? to_queue->trace_op->memAddress
+                                              : to_queue->trace_op->pcAddress);
                 priority_push(state_update_queue, to_queue);
                 DPRINTF("progress = 1 state update queue push\n");
                 progress = 1;
@@ -468,7 +478,8 @@ int tick(void) {
         }
         for (int j = 0; j < J + K; j++) {
             for (int k = 0; k < 3; k++) {
-                DPRINTF("FU_pipeline[%d][%d] = %p\n", j, k, FU_pipeline[j][k]);
+                // DPRINTF("FU_pipeline[%d][%d] = %p\n", j, k,
+                // FU_pipeline[j][k]);
                 if (FU_pipeline[j][k] != NULL) {
                     DPRINTF("progress = 1 execute pipeline moved\n");
                     progress = 1;
@@ -495,6 +506,9 @@ int tick(void) {
                         if (RS->src_arr[j] != NULL && !RS->src_arr[j]->ready)
                             ready = false;
                     }
+                    if (RS->op_typ == 0 && pendingMem[i] != 0) {
+                        ready = false;
+                    }
                     if (ready) {
                         // find next possible FU
                         for (int j = 0; j < J + K; j++) {
@@ -505,14 +519,16 @@ int tick(void) {
                             if (FU_pipeline[j][0] == NULL) {
                                 FU_pipeline[j][0] = RS;
                                 if (RS->op_typ == 0) {
-                                    // call memory request when put into FU pipeline
-                                    pendingMem[i][j] = 1;
-                                    memOpTag[i][j] = makeTag(i, globalTag);
+                                    // call memory request when put into FU
+                                    // pipeline
+                                    pendingMem[i] = 1;
+                                    memOpTag[i] = makeTag(i, globalTag);
                                     cs->memoryRequest(RS->trace_op, i,
                                                       makeTag(i, globalTag),
                                                       memOpCallback);
-                                    pendingCallbacks++;
-                                    printf("called memoryRequest with tag %ld\n", makeTag(i, globalTag));
+                                    DPRINTF(
+                                        "called memoryRequest with tag %ld\n",
+                                        makeTag(i, globalTag));
                                     globalTag++;
                                 }
                                 RS->FU = j;
@@ -554,8 +570,11 @@ int tick(void) {
                     continue;
                 }
                 //              queue_print("fast before", fast_schedule_queue);
-                // DPRINTF("push %lx into fast schedule quueue\n", cur_instr->op_typ == 0 ? cur_instr->trace_op->memAddress : cur_instr->trace_op->pcAddress);
-                DPRINTF("push %p into fast schedule quueue\n", cur_instr);
+                DPRINTF("push %lx into fast schedule quueue\n",
+                        cur_instr->op_typ == 0
+                            ? cur_instr->trace_op->memAddress
+                            : cur_instr->trace_op->pcAddress);
+                // DPRINTF("push %p into fast schedule queue\n", cur_instr);
                 //              queue_print("fast after", fast_schedule_queue);
                 queue_push(fast_schedule_queue, cur_instr);
                 // dispatch if schedule queue not full
@@ -573,11 +592,11 @@ int tick(void) {
 
             for (int i = 0; i < 2; i++) {
                 // if (cleared) {
-                    if (cur_instr->src_arr[i] == NULL) {
-                        cur_instr->src_arr[i] = calloc(1, sizeof(reg));
-                        cur_instr->src_arr[i]->reg_id = -1;
-                    }
-                    // cur_instr->src_arr[i]->reg_id = 0;
+                if (cur_instr->src_arr[i] == NULL) {
+                    cur_instr->src_arr[i] = calloc(1, sizeof(reg));
+                    cur_instr->src_arr[i]->reg_id = -1;
+                }
+                // cur_instr->src_arr[i]->reg_id = 0;
                 // }
 
                 reg *src = cur_instr->src_arr[i];
@@ -591,9 +610,9 @@ int tick(void) {
                     cur_instr->src_arr[i]->ready = false;
                 }
 
-                if (cleared) {
-                    cur_instr->src_arr[i]->reg_id = 0;
-                }
+                // if (cleared) {
+                //     cur_instr->src_arr[i]->reg_id = 0;
+                // }
             }
 
             // f-g: tag the destination -- if it is a register
@@ -639,7 +658,7 @@ int tick(void) {
         for (uint64_t f = 0; f < F; f++) {
             if (pendingBranch[i] == 1) {
                 // if branch was mispredicted, stall
-                printf("branch stall\n");
+                DPRINTF("branch stall\n");
                 break;
             }
             if (queue_full(dispatch_queue)) {
@@ -662,30 +681,33 @@ int tick(void) {
             switch (nextOp->op) {
             case MEM_LOAD:
             case MEM_STORE:
-                // printf("fetched memory instruction (0x%lx)\n", nextOp->memAddress);
+                // DPRINTF("fetched memory instruction (0x%lx)\n",
+                // nextOp->memAddress);
                 new_instr = init_instr(false, 0, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
-                DPRINTF("push M %p into dispatch queue\n", nextOp);
+                DPRINTF("push M %lx into dispatch queue\n", nextOp->memAddress);
                 assert(queue_push(dispatch_queue, new_instr));
                 break;
 
             case BRANCH:
-                // printf("fetched a branch instruction (0x%lx)\n", nextOp->pcAddress);
+                // DPRINTF("fetched a branch instruction (0x%lx)\n",
+                // nextOp->pcAddress);
                 pendingBranch[i] =
                     (bs->branchRequest(nextOp, i) == nextOp->nextPCAddress) ? 0
                                                                             : 1;
                 new_instr = init_instr(false, 1, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
-                DPRINTF("push B %p into dispatch queue\n", nextOp);
+                DPRINTF("push B %lx into dispatch queue\n", nextOp->pcAddress);
                 assert(queue_push(dispatch_queue, new_instr));
                 break;
 
             case ALU:
             case ALU_LONG:;
-                // printf("fetched an ALU instruction (0x%lx)\n", nextOp->pcAddress);
+                // DPRINTF("fetched an ALU instruction (0x%lx)\n",
+                // nextOp->pcAddress);
                 new_instr = init_instr(nextOp->op == ALU_LONG, -1, nextOp,
                                        nextOp->dest_reg, nextOp->src_reg);
-                DPRINTF("push A %p into dispatch queue\n", nextOp);
+                DPRINTF("push A %lx into dispatch queue\n", nextOp->pcAddress);
                 assert(queue_push(dispatch_queue, new_instr));
                 //              queue_print("dispatch_queue", dispatch_queue);
                 break;
@@ -718,13 +740,15 @@ int tick(void) {
         }
     }
 
-    // printf("\n");
+    // DPRINTF("\n");
     // queue_print("dispatch_queue", dispatch_queue);
     // queue_print("fast_schedule_queue", fast_schedule_queue);
-    // printf("\n");
+    // DPRINTF("\n");
 
-    if (pendingCallbacks != 0) {
-        progress = 1;
+    for (int i = 0; i < processorCount; i++) {
+        if (pendingMem[i] != 0) {
+            progress = 1;
+        }
     }
 
     if (progress == 0) {
