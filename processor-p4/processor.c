@@ -426,7 +426,7 @@ int tick(void) {
                 // DPRINTF("priority push %lx into state update quueue\n",
                 //         to_queue->op_typ == 0 ? to_queue->trace_op->memAddress
                 //                               : to_queue->trace_op->pcAddress);
-                // priority_push(state_update_queue, to_queue);
+                priority_push(state_update_queue, to_queue);
                 DPRINTF("progress = 1 state update queue push\n");
                 progress = 1;
             }
