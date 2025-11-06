@@ -7,6 +7,7 @@
 #include "branch.h"
 #include "cache.h"
 #include "processor.h"
+#include "common.h"
 #include "trace.h"
 
 #define DPRINTF(args...)                                                       \
@@ -313,6 +314,15 @@ int64_t instrCount = 0;
 const int64_t STALL_TIME = 100000;
 int64_t tickCount = 0;
 
+// control hazard (branch misprediction) metrics
+int64_t branchStalls, numMispredBranches = 0;
+
+// data hazard (data dependencies) metrics
+int64_t dataInstrCount, dataStalls, dataStallTicks = 0;
+
+// structural hazard (cache) metrics
+int64_t memInstrCount, memReqTicks = 0;
+
 int64_t makeTag(int procNum, int64_t baseTag) {
     return ((int64_t)procNum) | (baseTag << 8);
 }
@@ -332,9 +342,37 @@ void memOpCallback(int procNum, int64_t tag) {
 
 void print_stats() {
     double avg = tickCount == 0 ? 0 : (double)instrCount / (double)tickCount;
-    printf("Average number of instructions fired per cycle: %f\n", avg);
+    printf("Average number of instructions fired per cycle: %.2f\n", avg);
     printf("Total number of instructions: %ld\n", instrCount);
     printf("Total simulation run-time in number of cycles: %ld\n", tickCount);
+
+    printf("\n");
+
+    printf("==== P4 Report Metrics ====\n");
+    printf("Data Hazard Metrics:\n");
+    double avgDepStall = dataInstrCount == 0 ? 0 : (double)dataStalls / (double)dataInstrCount;
+    printf("    -   Average number of ticks stalled from unsatisfied data dependencies: %.2f\n", avgDepStall);
+
+    printf("Structural Hazard (but not really) Metrics:\n");
+    // printf("    -   Total number of memory instructions: %ld\n", memInstrCount);
+    // printf("    -   Total number of ticks from cache stalls: %ld\n", cacheStalls);
+    double avgMemTicks = memInstrCount == 0 ? 0 : (double)memReqTicks / (double)memInstrCount;
+    printf("    -  Average number of ticks per memory request: %.2f\n", avgMemTicks);
+
+    printf("Control Hazard Metrics:\n");
+    // printf("    -   Total number of branch instructions: %ld\n", branchInstrCount);
+    // printf("    -   Number of mispredicted branches: %ld\n", numMispredBranches);
+    // printf("    -   Total number of ticks stalled from mispredicted branches: %ld\n", branchStalls);
+    double avgBranchStall = numMispredBranches == 0 ? 0 : (double)branchStalls / (double)numMispredBranches;
+    printf("    -   Average number of ticks stalled from a single mispredicted branch: %.2f\n", avgBranchStall);
+
+    printf("Stall Summary:\n");
+    double percentDepTick = 100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
+    printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n", percentDepTick);
+    // double percentCacheTick = 100 * (tickCount == 0 ? 0 : (double)cacheStalls / (double)tickCount);
+    // printf("    -   Percent cache miss stall ticks out of total: %f%%\n", percentCacheTick);
+    double percentBranchTick = 100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
+    printf("    -   Percent mispredicted branch stall ticks out of total: %.2f%%\n", percentBranchTick);
 }
 
 int tick(void) {
@@ -354,6 +392,9 @@ int tick(void) {
 
     int progress = 0;
     for (int i = 0; i < processorCount; i++) {
+        if (pendingMem[i]) {
+            memReqTicks++;
+        }
         // The register file is written via the result bus. (SU g + set CDB.busy
         // to false)
         for (int j = 0; j < C; j++) {
@@ -447,9 +488,10 @@ int tick(void) {
         // — START: SCHEDULE/DISPATCH LATCH —
 
         // schedule b: mark indep instructions in schedule queue to fire
+        bool instr_exists[2] = {false, false};
         instr_queue *qs[2] = {long_schedule_queue, fast_schedule_queue};
-        for (int j = 0; j < 2; j++) {
-            instr_queue *q = qs[j];
+        for (int k = 0; k < 2; k++) {
+            instr_queue *q = qs[k];
             instr_node *cur_node = q->head;
             while (cur_node != NULL) {
                 instr *RS = cur_node->instr;
@@ -493,9 +535,35 @@ int tick(void) {
                                 break;
                             }
                         }
+                    } else {
+                        // instruction not ready -- data hazard
+                        instr_exists[k] = true;
+                        dataStalls++;
                     }
                 }
                 cur_node = cur_node->next;
+            }
+        }
+
+        // check for data dependency stalls
+        bool dataStalled = false;
+        for (int j = 0; j < J + K; j++) {
+            for (int k = 0; k < 3; k++) {
+                if (k != 0 && j < J) {
+                    break;
+                }
+                if (FU_pipeline[j][k] == NULL) {
+                    if ((j < J && instr_exists[1]) || (j >= J && instr_exists[0])) {
+                        // printf("j = %d, k = %d\n", j, k);
+                        // pipeline is not full -- data stall found
+                        dataStalled = true;
+                        break;
+                    }
+                }
+            }
+            if (dataStalled) {
+                dataStallTicks++;
+                break;
             }
         }
 
@@ -599,6 +667,7 @@ int tick(void) {
             if (pendingBranch[i] == 1) {
                 // if branch was mispredicted, stall
                 DPRINTF("branch stall\n");
+                branchStalls++;
                 break;
             }
             if (queue_full(dispatch_queue)) {
@@ -623,6 +692,8 @@ int tick(void) {
             case MEM_STORE:
                 // DPRINTF("fetched memory instruction (0x%lx)\n",
                 // nextOp->memAddress);
+                memInstrCount++;
+                dataInstrCount++;
                 new_instr = init_instr(false, 0, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
                 DPRINTF("push M %lx into dispatch queue\n", nextOp->memAddress);
@@ -635,6 +706,10 @@ int tick(void) {
                 pendingBranch[i] =
                     (bs->branchRequest(nextOp, i) == nextOp->nextPCAddress) ? 0
                                                                             : 1;
+                // branchInstrCount++;
+                if (pendingBranch[i] == 1) {
+                    numMispredBranches++;
+                }
                 new_instr = init_instr(false, 1, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
                 // DPRINTF("push B %lx into dispatch queue\n", nextOp->pcAddress);
@@ -645,6 +720,7 @@ int tick(void) {
             case ALU_LONG:;
                 // DPRINTF("fetched an ALU instruction (0x%lx)\n",
                 // nextOp->pcAddress);
+                dataInstrCount++;
                 new_instr = init_instr(nextOp->op == ALU_LONG, -1, nextOp,
                                        nextOp->dest_reg, nextOp->src_reg);
                 // DPRINTF("push A %lx into dispatch queue\n", nextOp->pcAddress);
