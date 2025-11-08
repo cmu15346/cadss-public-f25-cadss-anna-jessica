@@ -6,8 +6,8 @@
 
 #include "branch.h"
 #include "cache.h"
-#include "processor.h"
 #include "common.h"
+#include "processor.h"
 #include "trace.h"
 
 #define DPRINTF(args...)                                                       \
@@ -351,31 +351,51 @@ void print_stats() {
 
     printf("==== P4 Report Metrics ====\n");
     printf("Data Hazard Metrics:\n");
-    double avgDepStall = dataInstrCount == 0 ? 0 : (double)dataStalls / (double)dataInstrCount;
-    printf("    -   Average number of ticks stalled from unsatisfied data dependencies: %.2f\n", avgDepStall);
+    double avgDepStall =
+        dataInstrCount == 0 ? 0 : (double)dataStalls / (double)dataInstrCount;
+    printf("    -   Average number of ticks stalled from unsatisfied data "
+           "dependencies: %.2f\n",
+           avgDepStall);
 
     printf("Structural Hazard (but not really) Metrics:\n");
-    // printf("    -   Total number of memory instructions: %ld\n", memInstrCount);
-    // printf("    -   Total number of ticks from cache stalls: %ld\n", cacheStalls);
-    // double avgMemTicks = memInstrCount == 0 ? 0 : (double)memReqTicks / (double)memInstrCount;
-    // printf("    -  Average number of ticks per memory request: %.2f\n", avgMemTicks);
-    double avgMemStallTicks = memStalls == 0 ? 0 : (double)memStallTicks / (double)memStalls;
-    printf("    -  Average number of ticks stalled when ALU instr is blocked by a memory request: %.2f\n", avgMemStallTicks);
+    // printf("    -   Total number of memory instructions: %ld\n",
+    // memInstrCount); printf("    -   Total number of ticks from cache stalls:
+    // %ld\n", cacheStalls); double avgMemTicks = memInstrCount == 0 ? 0 :
+    // (double)memReqTicks / (double)memInstrCount; printf("    -  Average
+    // number of ticks per memory request: %.2f\n", avgMemTicks);
+    double avgMemStallTicks =
+        memStalls == 0 ? 0 : (double)memStallTicks / (double)memStalls;
+    printf("    -  Average number of ticks stalled when ALU instr is blocked "
+           "by a memory request: %.2f\n",
+           avgMemStallTicks);
 
     printf("Control Hazard Metrics:\n");
-    // printf("    -   Total number of branch instructions: %ld\n", branchInstrCount);
-    // printf("    -   Number of mispredicted branches: %ld\n", numMispredBranches);
-    // printf("    -   Total number of ticks stalled from mispredicted branches: %ld\n", branchStalls);
-    double avgBranchStall = numMispredBranches == 0 ? 0 : (double)branchStalls / (double)numMispredBranches;
-    printf("    -   Average number of ticks stalled from a single mispredicted branch: %.2f\n", avgBranchStall);
+    // printf("    -   Total number of branch instructions: %ld\n",
+    // branchInstrCount); printf("    -   Number of mispredicted branches:
+    // %ld\n", numMispredBranches); printf("    -   Total number of ticks
+    // stalled from mispredicted branches: %ld\n", branchStalls);
+    double avgBranchStall =
+        numMispredBranches == 0
+            ? 0
+            : (double)branchStalls / (double)numMispredBranches;
+    printf("    -   Average number of ticks stalled from a single mispredicted "
+           "branch: %.2f\n",
+           avgBranchStall);
 
     printf("Stall Summary:\n");
-    double percentDepTick = 100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
-    printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n", percentDepTick);
-    double percentCacheTick = 100 * (tickCount == 0 ? 0 : (double)memStalls / (double)tickCount);
-    printf("    -   Percent cache miss stall ticks out of total: %f%%\n", percentCacheTick);
-    double percentBranchTick = 100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
-    printf("    -   Percent mispredicted branch stall ticks out of total: %.2f%%\n", percentBranchTick);
+    double percentDepTick =
+        100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
+    printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n",
+           percentDepTick);
+    double percentCacheTick =
+        100 * (tickCount == 0 ? 0 : (double)memStalls / (double)tickCount);
+    printf("    -   Percent cache miss stall ticks out of total: %f%%\n",
+           percentCacheTick);
+    double percentBranchTick =
+        100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
+    printf("    -   Percent mispredicted branch stall ticks out of total: "
+           "%.2f%%\n",
+           percentBranchTick);
 }
 
 int tick(void) {
@@ -433,8 +453,10 @@ int tick(void) {
             // mark as completed
             completed[c] = I;
             // DPRINTF("progress = 1 SU a-e, %lx\n", I->op_typ == 0
-            //                                           ? I->trace_op->memAddress
-            //                                           : I->trace_op->pcAddress);
+            //                                           ?
+            //                                           I->trace_op->memAddress
+            //                                           :
+            //                                           I->trace_op->pcAddress);
             progress = 1;
         }
 
@@ -468,8 +490,10 @@ int tick(void) {
             //          DPRINTF("to_queue: %p\n", to_queue);
             if (to_queue != NULL) {
                 // DPRINTF("priority push %lx into state update quueue\n",
-                //         to_queue->op_typ == 0 ? to_queue->trace_op->memAddress
-                //                               : to_queue->trace_op->pcAddress);
+                //         to_queue->op_typ == 0 ?
+                //         to_queue->trace_op->memAddress
+                //                               :
+                //                               to_queue->trace_op->pcAddress);
                 priority_push(state_update_queue, to_queue);
                 DPRINTF("progress = 1 state update queue push\n");
                 progress = 1;
@@ -492,12 +516,13 @@ int tick(void) {
 
         // schedule b: mark indep instructions in schedule queue to fire
         bool instr_exists[2] = {false, false};
-        bool memStalled = false;
         instr_queue *qs[2] = {long_schedule_queue, fast_schedule_queue};
         for (int k = 0; k < 2; k++) {
             instr_queue *q = qs[k];
             instr_node *cur_node = q->head;
             while (cur_node != NULL) {
+
+                bool memStalled = false;
                 instr *RS = cur_node->instr;
 
                 if (!RS->fired) {
@@ -538,10 +563,11 @@ int tick(void) {
                                 progress = 1;
                                 break;
                             }
-                            if (RS->op_typ == -1 && !RS->is_long && pendingMem[i] == 1) {
-                                memStalls++;
-                                memStalled = true;
-                            }
+                        }
+                        if (RS->op_typ == -1 && !RS->is_long && !RS->fired &&
+                            pendingMem[i] == 1) {
+                            memStalls++;
+                            memStalled = true;
                         }
                     } else {
                         // instruction not ready -- data hazard
@@ -550,10 +576,10 @@ int tick(void) {
                     }
                 }
                 cur_node = cur_node->next;
+                if (memStalled == true) {
+                    memStallTicks++;
+                }
             }
-        }
-        if (memStalled == true) {
-            memStallTicks++;
         }
 
         // check for data dependency stalls
@@ -564,7 +590,8 @@ int tick(void) {
                     break;
                 }
                 if (FU_pipeline[j][k] == NULL) {
-                    if ((j < J && instr_exists[1]) || (j >= J && instr_exists[0])) {
+                    if ((j < J && instr_exists[1]) ||
+                        (j >= J && instr_exists[0])) {
                         // printf("j = %d, k = %d\n", j, k);
                         // pipeline is not full -- data stall found
                         dataStalled = true;
@@ -723,7 +750,8 @@ int tick(void) {
                 }
                 new_instr = init_instr(false, 1, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
-                // DPRINTF("push B %lx into dispatch queue\n", nextOp->pcAddress);
+                // DPRINTF("push B %lx into dispatch queue\n",
+                // nextOp->pcAddress);
                 assert(queue_push(dispatch_queue, new_instr));
                 break;
 
@@ -734,7 +762,8 @@ int tick(void) {
                 dataInstrCount++;
                 new_instr = init_instr(nextOp->op == ALU_LONG, -1, nextOp,
                                        nextOp->dest_reg, nextOp->src_reg);
-                // DPRINTF("push A %lx into dispatch queue\n", nextOp->pcAddress);
+                // DPRINTF("push A %lx into dispatch queue\n",
+                // nextOp->pcAddress);
                 assert(queue_push(dispatch_queue, new_instr));
                 //              queue_print("dispatch_queue", dispatch_queue);
                 break;
