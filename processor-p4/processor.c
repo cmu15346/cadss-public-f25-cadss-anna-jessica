@@ -357,17 +357,17 @@ void print_stats() {
            "dependencies: %.2f\n",
            avgDepStall);
 
-    printf("Structural Hazard (but not really) Metrics:\n");
+    // printf("Structural Hazard (but not really) Metrics:\n");
     // printf("    -   Total number of memory instructions: %ld\n",
     // memInstrCount); printf("    -   Total number of ticks from cache stalls:
     // %ld\n", cacheStalls); double avgMemTicks = memInstrCount == 0 ? 0 :
     // (double)memReqTicks / (double)memInstrCount; printf("    -  Average
     // number of ticks per memory request: %.2f\n", avgMemTicks);
-    double avgMemStallTicks =
-        memStalls == 0 ? 0 : (double)memStallTicks / (double)memStalls;
-    printf("    -  Average number of ticks stalled when ALU instr is blocked "
-           "by a memory request: %.2f\n",
-           avgMemStallTicks);
+    // double avgMemStallTicks =
+    //     memStalls == 0 ? 0 : (double)memStallTicks / (double)memStalls;
+    // printf("    -   Average number of ticks stalled when ALU instr is blocked "
+    //        "by a memory request: %.2f\n",
+    //        avgMemStallTicks);
 
     printf("Control Hazard Metrics:\n");
     // printf("    -   Total number of branch instructions: %ld\n",
@@ -383,19 +383,22 @@ void print_stats() {
            avgBranchStall);
 
     printf("Stall Summary:\n");
-    double percentDepTick =
-        100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
-    printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n",
-           percentDepTick);
-    double percentCacheTick =
-        100 * (tickCount == 0 ? 0 : (double)memStalls / (double)tickCount);
-    printf("    -   Percent cache miss stall ticks out of total: %f%%\n",
-           percentCacheTick);
-    double percentBranchTick =
-        100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
-    printf("    -   Percent mispredicted branch stall ticks out of total: "
-           "%.2f%%\n",
-           percentBranchTick);
+    // double percentDepTick =
+    //     100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
+    // printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n",
+    //        percentDepTick);
+    // double percentCacheTick =
+    //     100 * (tickCount == 0 ? 0 : (double)memStalls / (double)tickCount);
+    // printf("    -   Percent cache miss stall ticks out of total: %f%%\n",
+    //        percentCacheTick);
+    // double percentBranchTick =
+    //     100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
+    // printf("    -   Percent mispredicted branch stall ticks out of total: "
+    //        "%.2f%%\n",
+    //        percentBranchTick);
+    printf("    -   Data dependency stall ticks: %ld\n", dataStallTicks);
+    printf("    -   Cache miss stall ticks: %ld\n", memStallTicks);
+    printf("    -   Mispredicted branch stall ticks: %ld\n", branchStalls);
 }
 
 int tick(void) {
