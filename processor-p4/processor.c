@@ -320,8 +320,9 @@ int64_t branchStalls, numMispredBranches = 0;
 // data hazard (data dependencies) metrics
 int64_t dataInstrCount, dataStalls, dataStallTicks = 0;
 
-// structural hazard (cache) metrics
-int64_t memInstrCount, memReqTicks = 0;
+// cache miss metrics
+// int64_t memInstrCount, memReqTicks = 0;
+int64_t memStalls, memStallTicks = 0;
 
 int64_t makeTag(int procNum, int64_t baseTag) {
     return ((int64_t)procNum) | (baseTag << 8);
@@ -356,8 +357,10 @@ void print_stats() {
     printf("Structural Hazard (but not really) Metrics:\n");
     // printf("    -   Total number of memory instructions: %ld\n", memInstrCount);
     // printf("    -   Total number of ticks from cache stalls: %ld\n", cacheStalls);
-    double avgMemTicks = memInstrCount == 0 ? 0 : (double)memReqTicks / (double)memInstrCount;
-    printf("    -  Average number of ticks per memory request: %.2f\n", avgMemTicks);
+    // double avgMemTicks = memInstrCount == 0 ? 0 : (double)memReqTicks / (double)memInstrCount;
+    // printf("    -  Average number of ticks per memory request: %.2f\n", avgMemTicks);
+    double avgMemStallTicks = memStalls == 0 ? 0 : (double)memStallTicks / (double)memStalls;
+    printf("    -  Average number of ticks stalled when ALU instr is blocked by a memory request: %.2f\n", avgMemStallTicks);
 
     printf("Control Hazard Metrics:\n");
     // printf("    -   Total number of branch instructions: %ld\n", branchInstrCount);
@@ -369,8 +372,8 @@ void print_stats() {
     printf("Stall Summary:\n");
     double percentDepTick = 100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
     printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n", percentDepTick);
-    // double percentCacheTick = 100 * (tickCount == 0 ? 0 : (double)cacheStalls / (double)tickCount);
-    // printf("    -   Percent cache miss stall ticks out of total: %f%%\n", percentCacheTick);
+    double percentCacheTick = 100 * (tickCount == 0 ? 0 : (double)memStalls / (double)tickCount);
+    printf("    -   Percent cache miss stall ticks out of total: %f%%\n", percentCacheTick);
     double percentBranchTick = 100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
     printf("    -   Percent mispredicted branch stall ticks out of total: %.2f%%\n", percentBranchTick);
 }
@@ -392,9 +395,9 @@ int tick(void) {
 
     int progress = 0;
     for (int i = 0; i < processorCount; i++) {
-        if (pendingMem[i]) {
-            memReqTicks++;
-        }
+        // if (pendingMem[i]) {
+        //     memReqTicks++;
+        // }
         // The register file is written via the result bus. (SU g + set CDB.busy
         // to false)
         for (int j = 0; j < C; j++) {
@@ -489,6 +492,7 @@ int tick(void) {
 
         // schedule b: mark indep instructions in schedule queue to fire
         bool instr_exists[2] = {false, false};
+        bool memStalled = false;
         instr_queue *qs[2] = {long_schedule_queue, fast_schedule_queue};
         for (int k = 0; k < 2; k++) {
             instr_queue *q = qs[k];
@@ -534,6 +538,10 @@ int tick(void) {
                                 progress = 1;
                                 break;
                             }
+                            if (RS->op_typ == -1 && !RS->is_long && pendingMem[i] == 1) {
+                                memStalls++;
+                                memStalled = true;
+                            }
                         }
                     } else {
                         // instruction not ready -- data hazard
@@ -543,6 +551,9 @@ int tick(void) {
                 }
                 cur_node = cur_node->next;
             }
+        }
+        if (memStalled == true) {
+            memStallTicks++;
         }
 
         // check for data dependency stalls
@@ -692,7 +703,7 @@ int tick(void) {
             case MEM_STORE:
                 // DPRINTF("fetched memory instruction (0x%lx)\n",
                 // nextOp->memAddress);
-                memInstrCount++;
+                // memInstrCount++;
                 dataInstrCount++;
                 new_instr = init_instr(false, 0, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
