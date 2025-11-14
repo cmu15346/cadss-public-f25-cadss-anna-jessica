@@ -25,48 +25,63 @@ typedef struct _pendingRequest {
 } pendingRequest;
 
 // nul terminated so tail points to last node
-typedef struct _pendingQueue {
+typedef struct _memRequest {
     pendingRequest* head;
     pendingRequest* tail;
-} pendingQueue;
+    void (*memCallback)(int, int64_t);
+    int64_t requestTag;
+    struct _memRequest *next;
+} memRequest;
 
-int64_t globalTag = 0;
+typedef struct _requestQueue {
+    memRequest* head;
+    memRequest* tail;
+} requestQueue;
+
+// int64_t globalTag = 0;
 int8_t procNum = 0;
 
-void (*memCallback)(int, int64_t);
+// void (*memCallback)(int, int64_t);
 
 cache *self = NULL;
 coher *coherComp = NULL;
 
 int processorCount = 1;
 int CADSS_VERBOSE = 0;
-pendingQueue q = {0};
+// memRequest q = {0};
 
-void enqueueNode(pendingRequest* node) {
-   if (q.head == NULL) {
-       q.head = node;
-       q.tail = node;
+requestQueue memReqQueue = {0};
+
+// pushes a new pending request (PERM/INV) to the end of a single memory request's queue
+void enqueueNode(memRequest* req, pendingRequest* node) {
+   if (req->head == NULL) {
+       req->head = node;
+       req->tail = node;
    } 
    else {
-       assert(q.tail != NULL);
-       q.tail->next = node;
-       q.tail = node;
+       assert(req->tail != NULL);
+       req->tail->next = node;
+       req->tail = node;
    }
 }
 
-void dequeueRequest() {
-    assert(q.head != NULL && q.tail != NULL);
+// pops the pending request (PERM/INV) from the front of a single memory request's queue
+void dequeuePendingRequest(memRequest* req) {
+    assert(req->head != NULL && req->tail != NULL);
+
     DPRINTF("popping from queue\n");
-    pendingRequest* temp = q.head;
-    if (q.head == q.tail) {
-        q.tail = NULL;
+    pendingRequest* temp = req->head;
+    if (req->head == req->tail) {
+        req->tail = NULL;
     }
-    q.head = q.head->next;
-    DPRINTF("address of head: %p\n", q.head);
+    req->head = req->head->next;
+    DPRINTF("address of head: %p\n", req->head);
     free(temp);
 }
 
-void enqueueRequest(int64_t addr, bool isLoad,
+// given pending request (PERM/INV) fields, create the pending request and enqueue it to the
+// given memory request's queue
+void enqueuePendingRequest(memRequest* req, int64_t addr, bool isLoad,
                     reqType requestType, cacheResult cacheResult) {
     struct _pendingRequest *newReq = malloc(sizeof(struct _pendingRequest));
     // initialize newReq
@@ -76,7 +91,40 @@ void enqueueRequest(int64_t addr, bool isLoad,
     newReq->requestType = requestType;
     newReq->cacheResult = cacheResult;
     newReq->next = NULL;
-    enqueueNode(newReq);
+    enqueueNode(req, newReq);
+}
+
+memRequest *enqueueMemRequest(void (*memCallback)(int, int64_t), int64_t requestTag) {
+    memRequest *memReq = malloc(sizeof(struct _memRequest));
+    memReq->head = NULL;
+    memReq->tail = NULL;
+    memReq->memCallback = memCallback;
+    memReq->requestTag = requestTag;
+    memReq->next = NULL;
+
+    if (memReqQueue.head == NULL) {
+        memReqQueue.head = memReq;
+       memReqQueue.tail = memReq;
+    } else {
+        assert(memReqQueue.tail != NULL);
+       memReqQueue.tail->next = memReq;
+       memReqQueue.tail = memReq;
+    }
+
+    assert(memReqQueue.head != NULL && memReqQueue.tail != NULL);
+    return memReq;
+}
+
+void dequeueMemRequest(memRequest* memReq) {
+    assert(memReqQueue.head != NULL && memReqQueue.tail != NULL);
+    DPRINTF("popping from queue\n");
+    memRequest* temp = memReqQueue.head;
+    if (memReqQueue.head == memReqQueue.tail) {
+        memReqQueue.tail = NULL;
+    }
+    memReqQueue.head = memReqQueue.head->next;
+    DPRINTF("address of head: %p\n", memReqQueue.head);
+    free(temp);
 }
 
 void memoryRequest(trace_op *op, int processorNum, int64_t tag,
@@ -348,7 +396,7 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
  * Updates cache with result of load operation using a given address
  */
 int load(unsigned long addr, unsigned long *evict_addr) {
-    victim_i > 0 ? cache_access_victim(addr, evict_addr, false) : cache_access(addr, evict_addr, false);
+    return victim_i > 0 ? cache_access_victim(addr, evict_addr, false) : cache_access(addr, evict_addr, false);
 }
 
 /**
@@ -359,7 +407,7 @@ int load(unsigned long addr, unsigned long *evict_addr) {
  * Updates cache with result of store operation using a given address
  */
 int store(unsigned long addr, unsigned long *evict_addr) {
-    victim_i > 0 ? cache_access_victim(addr, evict_addr, true) : cache_access(addr, evict_addr, true);
+    return victim_i > 0 ? cache_access_victim(addr, evict_addr, true) : cache_access(addr, evict_addr, true);
 }
 
 cache *init(cache_sim_args *csa) {
@@ -431,34 +479,37 @@ cache *init(cache_sim_args *csa) {
 // the queue manually ourselves (aka we can't wait for next tick)
 // note this only happens if permReq returns 1
 void handlePermReq() {
-    q.head->isStarted = true;
-    if (coherComp->permReq(q.head->isLoad, q.head->addr, procNum)) {
-        dequeueRequest();
+    memRequest *q = memReqQueue.head;
+    q->head->isStarted = true;
+    if (coherComp->permReq(q->head->isLoad, q->head->addr, procNum)) {
+        dequeuePendingRequest(q);
     }
 }
 
 // invReq's equivalent to permReq's handlePermReq
 void handleInvReq() {
-    q.head->isStarted = true;
+    memRequest *q = memReqQueue.head;
+    q->head->isStarted = true;
     // invlReq should return 1 for P1 (aka wait)
-    assert(coherComp->invlReq(q.head->addr, procNum));
+    assert(coherComp->invlReq(q->head->addr, procNum));
 }
 
 // This routine is a linkage to the rest of the memory hierarchy
 void coherCallback(int type, int procNum, int64_t addr) {
+    memRequest *q = memReqQueue.head;
     switch (type) {
     case NO_ACTION:
         DPRINTF("** received inv callback\n");
         // dq current invreq
-        dequeueRequest();
+        dequeuePendingRequest(q);
         handlePermReq();
         break;
     case DATA_RECV:
         // This indicates that the cache has received data from memory
 
         // check that the addr is the pending access
-        assert(addr == q.head->addr);
-        dequeueRequest();
+        assert(addr == q->head->addr);
+        dequeuePendingRequest(q);
         break;
 
     case INVALIDATE:
@@ -476,7 +527,7 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
     assert(op != NULL);
     assert(callback != NULL);
 
-    printf("called memoryReq\n");
+    DPRINTF("called memoryReq\n");
 
     // Simple model to only have one outstanding memory operation
     // if (countDown != 0)
@@ -484,13 +535,15 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
     //     assert(pending.memCallback != NULL);
     //     pending.memCallback(pending.procNum, pending.tag);
     // }
-    assert(q.head == NULL && q.tail == NULL);
+    memRequest *memReq = enqueueMemRequest(callback, tag);
+    assert(memReqQueue.head != NULL && memReqQueue.tail != NULL);
+    assert(memReq->head == NULL && memReq->tail == NULL);
 
     // In a real cache simulator, the delay is based
     // on whether the request is a hit or miss.
-    globalTag = tag;
+    // globalTag = tag;
     procNum = processorNum;
-    memCallback = callback;
+    // memCallback = callback;
 
     int res1, res2 = 0;
     unsigned long evict_addr;
@@ -506,16 +559,16 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         if (res1 == 1) {
             // just miss
             DPRINTF("miss, enqueued %lX\n", addr);
-            enqueueRequest(addr, op->op == MEM_LOAD, PERM, MISS);
+            enqueuePendingRequest(memReq, addr, op->op == MEM_LOAD, PERM, MISS);
         } else if (res1 == 2) {
             // miss and evict
             DPRINTF("miss, enqueued %lX, evicting %lX\n", addr, evict_addr);
 
-            enqueueRequest(evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
-            enqueueRequest(addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
+            enqueuePendingRequest(memReq, evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
+            enqueuePendingRequest(memReq, addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
         } else if (res1 == 0) {
             DPRINTF("hit, enqueued %lX\n", addr);
-            enqueueRequest(addr, op->op == MEM_LOAD, PERM, HIT);
+            enqueuePendingRequest(memReq, addr, op->op == MEM_LOAD, PERM, HIT);
         } else {
             assert(false);
         }
@@ -527,7 +580,7 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
             // if s==0, just send perm request, but don't do anything in the cache because yes...
             if (s == 0) {
                 DPRINTF("second req, enqueued %lX\n", next_addr);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, NA);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, NA);
                 break;
             }
             
@@ -536,16 +589,16 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
             if (res2 == 1) {
                 // just miss
                 DPRINTF("second miss, enqueued %lX\n", next_addr);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, MISS);
             } else if (res2 == 2) {
                 // miss and evict
                 DPRINTF("second miss, enqueued %lX, evicting %lX\n", next_addr, evict_addr);
 
-                enqueueRequest(evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
+                enqueuePendingRequest(memReq, evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
             } else if (res2 == 0) {
                 DPRINTF("second hit, enqueued %lX\n", next_addr);
-                enqueueRequest(next_addr, op->op == MEM_LOAD, PERM, HIT);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, HIT);
             } else {
                 assert(false);
             }
@@ -561,18 +614,22 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
     }
 }
 
-void advancePendingQueue() {
+void advanceQueue() {
+    memRequest *q = memReqQueue.head;
+    if (q == NULL) {
+        return;
+    }
     // if queue is empty, see if callback is necessary
-    if (q.head == NULL) {
-        if (memCallback != NULL) {
-            memCallback(procNum, globalTag);
-            memCallback = NULL;
-            procNum = -1;
-            globalTag = -1;
+    if (q->head == NULL) {
+        if (q->memCallback != NULL) {
+            // printf("cache called mem callback\n");
+            q->memCallback(procNum, q->requestTag);
+            memReqQueue.head = q->next; // moves on to the next memory request
+            free(q);
         }
     }
-    else if (!q.head->isStarted) {
-        q.head->requestType == INV ? handleInvReq() : handlePermReq();
+    else if (!q->head->isStarted) {
+        q->head->requestType == INV ? handleInvReq() : handlePermReq();
     }
 }
 
@@ -583,7 +640,7 @@ int tick() {
     // Advance ticks in the coherence component.
     coherComp->si.tick();
 
-    advancePendingQueue();
+    advanceQueue();
 
     return 1;
 }
