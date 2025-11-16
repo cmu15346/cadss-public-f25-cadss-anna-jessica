@@ -1,18 +1,18 @@
-#include <coherence.h>
-#include <trace.h>
-#include <getopt.h>
 #include "coher_internal.h"
+#include <coherence.h>
+#include <getopt.h>
+#include <trace.h>
 
 #include "stree.h"
 
 typedef void (*cacheCallbackFunc)(int, int, int64_t);
 
-tree_t** coherStates = NULL;
+tree_t **coherStates = NULL;
 int processorCount = 1;
 int CADSS_VERBOSE = 0;
 coherence_scheme cs = MI;
-coher* self = NULL;
-interconn* inter_sim = NULL;
+coher *self = NULL;
+interconn *inter_sim = NULL;
 cacheCallbackFunc cacheCallback = NULL;
 
 uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum);
@@ -20,31 +20,26 @@ uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum);
 uint8_t invlReq(uint64_t addr, int processorNum);
 void registerCacheInterface(void (*callback)(int, int, int64_t));
 
-coher* init(coher_sim_args* csa)
-{
+coher *init(coher_sim_args *csa) {
     int op;
 
-    while ((op = getopt(csa->arg_count, csa->arg_list, "s:")) != -1)
-    {
-        switch (op)
-        {
-            case 's':
-                cs = atoi(optarg);
-                break;
+    while ((op = getopt(csa->arg_count, csa->arg_list, "s:")) != -1) {
+        switch (op) {
+        case 's':
+            cs = atoi(optarg);
+            break;
         }
     }
 
-    if (processorCount < 1 || processorCount > 256)
-    {
+    if (processorCount < 1 || processorCount > 256) {
         fprintf(stderr,
                 "Error: processorCount outside valid range - %d specified\n",
                 processorCount);
         return NULL;
     }
 
-    coherStates = malloc(sizeof(tree_t*) * processorCount);
-    for (int i = 0; i < processorCount; i++)
-    {
+    coherStates = malloc(sizeof(tree_t *) * processorCount);
+    for (int i = 0; i < processorCount; i++) {
         coherStates[i] = tree_new();
     }
 
@@ -64,30 +59,25 @@ coher* init(coher_sim_args* csa)
     return self;
 }
 
-void registerCacheInterface(void (*callback)(int, int, int64_t))
-{
+void registerCacheInterface(void (*callback)(int, int, int64_t)) {
     cacheCallback = callback;
 }
 
-coherence_states getState(uint64_t addr, int processorNum)
-{
-    coherence_states lookState
-        = (coherence_states)tree_find(coherStates[processorNum], addr);
+coherence_states getState(uint64_t addr, int processorNum) {
+    coherence_states lookState =
+        (coherence_states)tree_find(coherStates[processorNum], addr);
     if (lookState == UNDEF)
         return INVALID;
 
     return lookState;
 }
 
-void setState(uint64_t addr, int processorNum, coherence_states nextState)
-{
-    tree_insert(coherStates[processorNum], addr, (void*)nextState);
+void setState(uint64_t addr, int processorNum, coherence_states nextState) {
+    tree_insert(coherStates[processorNum], addr, (void *)nextState);
 }
 
-uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
-{
-    if (processorNum < 0 || processorNum >= processorCount)
-    {
+uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum) {
+    if (processorNum < 0 || processorNum >= processorCount) {
         // ERROR
     }
 
@@ -95,65 +85,53 @@ uint8_t busReq(bus_req_type reqType, uint64_t addr, int processorNum)
     coherence_states nextState;
     cache_action ca;
 
-    switch (cs)
-    {
-        case MI:
-            nextState
-                = snoopMI(reqType, &ca, currentState, addr, processorNum);
-            break;
-        case MSI:
-            nextState
-                = snoopMSI(reqType, &ca, currentState, addr, processorNum);
-            break;
-        case MESI:
-            nextState
-                = snoopMESI(reqType, &ca, currentState, addr, processorNum);
-            break;
-        case MOESI:
-            // TODO: Implement this.
-            break;
-        case MESIF:
-            nextState
-                = snoopMESIF(reqType, &ca, currentState, addr, processorNum);
-            break;
-        default:
-            fprintf(stderr, "Undefined coherence scheme - %d\n", cs);
-            break;
+    switch (cs) {
+    case MI:
+        nextState = snoopMI(reqType, &ca, currentState, addr, processorNum);
+        break;
+    case MSI:
+        nextState = snoopMSI(reqType, &ca, currentState, addr, processorNum);
+        break;
+    case MESI:
+        nextState = snoopMESI(reqType, &ca, currentState, addr, processorNum);
+        break;
+    case MOESI:
+        // TODO: Implement this.
+        break;
+    case MESIF:
+        nextState = snoopMESIF(reqType, &ca, currentState, addr, processorNum);
+        break;
+    default:
+        fprintf(stderr, "Undefined coherence scheme - %d\n", cs);
+        break;
     }
 
-    switch (ca)
-    {
-        case DATA_RECV:
-        case INVALIDATE:
-        case NO_ACTION:
-            cacheCallback(ca, processorNum, addr);
-            break;
+    switch (ca) {
+    case DATA_RECV:
+    case INVALIDATE:
+    case NO_ACTION:
+        cacheCallback(ca, processorNum, addr);
+        break;
 
-        default:
-            assert(0);
+    default:
+        assert(0);
     }
 
     // If the destination state is invalid, that is an implicit
     // state and does not need to be stored in the tree.
-    if (nextState == INVALID)
-    {
-        if (currentState != INVALID)
-        {
+    if (nextState == INVALID) {
+        if (currentState != INVALID) {
             tree_remove(coherStates[processorNum], addr);
         }
-    }
-    else
-    {
+    } else {
         setState(addr, processorNum, nextState);
     }
 
     return 0;
 }
 
-uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
-{
-    if (processorNum < 0 || processorNum >= processorCount)
-    {
+uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum) {
+    if (processorNum < 0 || processorNum >= processorCount) {
         // ERROR
     }
 
@@ -161,106 +139,99 @@ uint8_t permReq(uint8_t is_read, uint64_t addr, int processorNum)
     coherence_states nextState;
     uint8_t permAvail = 0;
 
-    switch (cs)
-    {
-        case MI:
-            nextState = cacheMI(is_read, &permAvail, currentState, addr,
-                                processorNum);
-            break;
+    switch (cs) {
+    case MI:
+        nextState =
+            cacheMI(is_read, &permAvail, currentState, addr, processorNum);
+        break;
 
-        case MSI:
-            nextState = cacheMSI(is_read, &permAvail, currentState, addr,
-                                processorNum);
-            break;
+    case MSI:
+        nextState =
+            cacheMSI(is_read, &permAvail, currentState, addr, processorNum);
+        break;
 
-        case MESI:
-            nextState = cacheMESI(is_read, &permAvail, currentState, addr,
-                                processorNum);
-            break;
+    case MESI:
+        nextState =
+            cacheMESI(is_read, &permAvail, currentState, addr, processorNum);
+        break;
 
-        case MOESI:
-            // TODO: Implement this.
-            break;
+    case MOESI:
+        // TODO: Implement this.
+        break;
 
-        case MESIF:
-            nextState = cacheMESIF(is_read, &permAvail, currentState, addr,
-                                processorNum);
-            break;
+    case MESIF:
+        nextState =
+            cacheMESIF(is_read, &permAvail, currentState, addr, processorNum);
+        break;
 
-        default:
-            fprintf(stderr, "Undefined coherence scheme - %d\n", cs);
-            break;
+    default:
+        fprintf(stderr, "Undefined coherence scheme - %d\n", cs);
+        break;
     }
 
     setState(addr, processorNum, nextState);
     return permAvail;
 }
 
-uint8_t invlReq(uint64_t addr, int processorNum)
-{
+uint8_t invlReq(uint64_t addr, int processorNum) {
     coherence_states currentState, nextState = INVALID;
     cache_action ca;
     uint8_t flush;
 
-    if (processorNum < 0 || processorNum >= processorCount)
-    {
+    if (processorNum < 0 || processorNum >= processorCount) {
         // ERROR
     }
 
     currentState = getState(addr, processorNum);
-	//printf("%d - %d - %p\n", processorNum, currentState, addr);
+    // printf("%d - %d - %p\n", processorNum, currentState, addr);
 
     flush = 0;
-    switch (cs)
-    {
-        case MI:
-            nextState = INVALID;
-            if (currentState != INVALID)
-            {
-                inter_sim->busReq(DATA, addr, processorNum);
+    switch (cs) {
+    case MI:
+        nextState = INVALID;
+        if (currentState != INVALID) {
+            inter_sim->busReq(DATA, addr, processorNum);
+            flush = 1;
+        }
+        break;
+
+    case MSI:
+        nextState = INVALID;
+        if (currentState != INVALID) {
+            inter_sim->busReq(DATA, addr, processorNum);
+            if (currentState == MODIFIED) {
                 flush = 1;
             }
-            break;
-
-        case MSI:
-            nextState = INVALID;
-            if (currentState != INVALID) {
-                inter_sim->busReq(DATA, addr, processorNum);
-                if (currentState == MODIFIED) {
-                    flush = 1;
-                }
+        }
+        break;
+    case MESI:
+        nextState = INVALID;
+        if (currentState != INVALID) {
+            inter_sim->busReq(DATA, addr, processorNum);
+            if (currentState == MODIFIED) {
+                flush = 1;
             }
-            break;
-        case MESI:
-            nextState = INVALID;
-            if (currentState != INVALID)
-            {
-                inter_sim->busReq(DATA, addr, processorNum);
-                if (currentState == MODIFIED) {
-                    flush = 1;
-                }
+        }
+        break;
+
+    case MOESI:
+        // TODO: Implement this.
+        break;
+
+    case MESIF:
+        nextState = INVALID;
+        if (currentState != INVALID) {
+            inter_sim->busReq(DATA, addr, processorNum);
+            // TODO: flush logic
+            if (currentState == MODIFIED) {
+                flush = 1;
             }
-            break;
+        }
+        break;
 
-        case MOESI:
-            // TODO: Implement this.
-            break;
-
-        case MESIF:
-            nextState = INVALID;
-            if (currentState != INVALID)
-            {
-                inter_sim->busReq(DATA, addr, processorNum);
-                // TODO: flush logic
-                if (currentState == MODIFIED) {
-                    flush = 1;
-                }
-            }
-            break;
-
-        default:
-            fprintf(stderr, "Undefined coherence scheme - %d\n", cs);
-            break;
+    default:
+        fprintf(stderr, "Undefined coherence scheme - %d\n", cs);
+        break;
     }
 
     tree_remove(coherStates[processorNum], addr);
@@ -269,18 +240,11 @@ uint8_t invlReq(uint64_t addr, int processorNum)
     return flush;
 }
 
-int tick()
-{
-    return inter_sim->si.tick();
-}
+int tick() { return inter_sim->si.tick(); }
 
-int finish(int outFd)
-{
-    return inter_sim->si.finish(outFd);
-}
+int finish(int outFd) { return inter_sim->si.finish(outFd); }
 
-int destroy(void)
-{
+int destroy(void) {
     // TODO
 
     return inter_sim->si.destroy();
