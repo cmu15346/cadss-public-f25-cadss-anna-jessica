@@ -199,6 +199,7 @@ coherence_states cacheMESI(uint8_t is_read, uint8_t *permAvail,
         *permAvail = 0;
         if (is_read) {
             sendBusRd(addr, procNum);
+            return INVALID_READ;
         } else {
             sendBusWr(addr, procNum);
         }
@@ -209,6 +210,9 @@ coherence_states cacheMESI(uint8_t is_read, uint8_t *permAvail,
     case INVALID_MODIFIED:
         *permAvail = 0;
         return INVALID_MODIFIED;
+    case INVALID_READ:
+        *permAvail = 0;
+        return INVALID_READ;
     case EXCLUSIVE:
         *permAvail = 1;
         if (!is_read) {
@@ -246,6 +250,7 @@ coherence_states snoopMESI(bus_req_type reqType, cache_action *ca,
     case MODIFIED:
         indicateShared(addr, procNum); // Needed for E state
         if (reqType == BUSRD) {
+            *ca = INVALIDATE;
             return SHARED_STATE;
         } else if (reqType == BUSWR) {
             *ca = INVALIDATE;
@@ -253,6 +258,12 @@ coherence_states snoopMESI(bus_req_type reqType, cache_action *ca,
         }
         return MODIFIED;
     case INVALID_MODIFIED:
+        if (reqType == DATA || SHARED) {
+            *ca = DATA_RECV;
+            return MODIFIED;
+        }
+        return INVALID_MODIFIED;
+    case INVALID_READ:
         if (reqType == DATA) {
             *ca = DATA_RECV;
             return EXCLUSIVE;
@@ -260,7 +271,7 @@ coherence_states snoopMESI(bus_req_type reqType, cache_action *ca,
             *ca = DATA_RECV;
             return SHARED_STATE;
         }
-        return INVALID_MODIFIED;
+        return INVALID_READ;
     case EXCLUSIVE:
         indicateShared(addr, procNum);
         if (reqType == BUSRD) {
@@ -278,7 +289,7 @@ coherence_states snoopMESI(bus_req_type reqType, cache_action *ca,
         }
         return SHARED_STATE;
     case SHARED_MODIFIED:
-        if (reqType == DATA) {
+        if (reqType == DATA || SHARED) {
             *ca = DATA_RECV;
             return MODIFIED;
         }
@@ -296,9 +307,146 @@ coherence_states snoopMESI(bus_req_type reqType, cache_action *ca,
 // MOESI
 // ---------------------------------------
 
-
-
 // ---------------------------------------
 // MESIF
 // ---------------------------------------
 
+coherence_states cacheMESIF(uint8_t is_read, uint8_t *permAvail,
+                            coherence_states currentState, uint64_t addr,
+                            int procNum) {
+    switch (currentState) {
+    case INVALID:
+        *permAvail = 0;
+        if (is_read) {
+            sendBusRd(addr, procNum);
+            return INVALID_READ;
+        } else {
+            sendBusWr(addr, procNum);
+        }
+        return INVALID_MODIFIED;
+    case MODIFIED:
+        *permAvail = 1;
+        return MODIFIED;
+    case INVALID_MODIFIED:
+        *permAvail = 0;
+        return INVALID_MODIFIED;
+    case INVALID_READ:
+        *permAvail = 0;
+        return INVALID_READ;
+    case EXCLUSIVE:
+        *permAvail = 1;
+        if (!is_read) {
+            return MODIFIED;
+        }
+        return EXCLUSIVE;
+    case SHARED_STATE:
+        if (is_read) {
+            *permAvail = 1;
+        } else {
+            *permAvail = 0;
+            sendBusWr(addr, procNum);
+            return SHARED_MODIFIED;
+        }
+        return SHARED_STATE;
+    case SHARED_MODIFIED:
+        *permAvail = 0;
+        return SHARED_MODIFIED;
+    case FORWARD:
+        if (is_read) {
+            *permAvail = 1;
+        } else {
+            *permAvail = 0;
+            sendBusWr(addr, procNum);
+            return FORWARD_MODIFIED;
+        }
+        return FORWARD;
+    case FORWARD_MODIFIED:
+        *permAvail = 0;
+        return FORWARD_MODIFIED;
+    default:
+        fprintf(stderr, "State %d not supported, found on %lx\n", currentState,
+                addr);
+        break;
+    }
+
+    return INVALID;
+}
+
+coherence_states snoopMESIF(bus_req_type reqType, cache_action *ca,
+                            coherence_states currentState, uint64_t addr,
+                            int procNum) {
+    *ca = NO_ACTION;
+    switch (currentState) {
+    case INVALID:
+        return INVALID;
+    case MODIFIED:
+        indicateShared(addr, procNum); // Needed for E state
+        if (reqType == BUSRD) {
+            *ca = INVALIDATE;
+            return SHARED_STATE;
+        } else if (reqType == BUSWR) {
+            *ca = INVALIDATE;
+            return INVALID;
+        }
+        return MODIFIED;
+    case INVALID_READ:
+        if (reqType == DATA) {
+            *ca = DATA_RECV;
+            return EXCLUSIVE;
+        } else if (reqType == SHARED) {
+            return FORWARD;
+        }
+        return INVALID_READ;
+    case INVALID_MODIFIED:
+        if (reqType == DATA || SHARED) {
+            *ca = DATA_RECV;
+            return MODIFIED;
+        }
+        return INVALID_MODIFIED;
+    case EXCLUSIVE:
+        indicateShared(addr, procNum);
+        if (reqType == BUSRD) {
+            *ca = INVALIDATE;
+            return SHARED_STATE;
+        } else if (reqType == BUSWR) {
+            *ca = INVALIDATE;
+            return INVALID;
+        }
+        return EXCLUSIVE;
+    case SHARED_STATE:
+        indicateShared(addr, procNum);
+        if (reqType == BUSWR) {
+            *ca = INVALIDATE;
+            return INVALID;
+        }
+        return SHARED_STATE;
+    case SHARED_MODIFIED:
+        if (reqType == DATA || SHARED) {
+            *ca = DATA_RECV;
+            return MODIFIED;
+        }
+        return SHARED_MODIFIED;
+    case FORWARD:
+        indicateShared(addr, procNum);
+        if (reqType == BUSRD) {
+            *ca = INVALIDATE;
+            return SHARED_STATE;
+        } else if (reqType == BUSWR) {
+            *ca = INVALIDATE;
+            return INVALID;
+        }
+        return FORWARD;
+    case FORWARD_MODIFIED:
+        if (reqType == DATA || SHARED) {
+            *ca = DATA_RECV;
+            return MODIFIED;
+        }
+        return SHARED_MODIFIED;
+    default:
+        fprintf(stderr, "State %d not supported, found on %lx\n", currentState,
+                addr);
+        break;
+    }
+
+    return INVALID;
+}
