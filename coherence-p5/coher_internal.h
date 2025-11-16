@@ -19,6 +19,8 @@ typedef enum _coherence_states
     SHARED_MODIFIED,
     FORWARD,
     FORWARD_MODIFIED,
+    OWNED,
+    OWNED_MODIFIED
 } coherence_states;
 
 typedef enum _coherence_scheme
