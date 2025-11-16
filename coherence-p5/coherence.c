@@ -222,7 +222,6 @@ uint8_t invlReq(uint64_t addr, int processorNum) {
         nextState = INVALID;
         if (currentState != INVALID) {
             inter_sim->busReq(DATA, addr, processorNum);
-            // TODO: flush logic
             if (currentState == MODIFIED) {
                 flush = 1;
             }

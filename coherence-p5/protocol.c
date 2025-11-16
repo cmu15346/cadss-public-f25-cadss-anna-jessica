@@ -325,8 +325,8 @@ coherence_states cacheMESIF(uint8_t is_read, uint8_t *permAvail,
             return INVALID_READ;
         } else {
             sendBusWr(addr, procNum);
+            return INVALID_MODIFIED;
         }
-        return INVALID_MODIFIED;
     case MODIFIED:
         *permAvail = 1;
         return MODIFIED;
@@ -340,21 +340,21 @@ coherence_states cacheMESIF(uint8_t is_read, uint8_t *permAvail,
     case SHARED_STATE:
         if (is_read) {
             *permAvail = 1;
+            return SHARED_STATE;
         } else {
             *permAvail = 0;
             sendBusWr(addr, procNum);
             return SHARED_MODIFIED;
         }
-        return SHARED_STATE;
     case FORWARD:
         if (is_read) {
             *permAvail = 1;
+            return FORWARD;
         } else {
             *permAvail = 0;
             sendBusWr(addr, procNum);
             return FORWARD_MODIFIED;
         }
-        return FORWARD;
     case INVALID_MODIFIED:
         *permAvail = 0;
         return INVALID_MODIFIED;
@@ -384,39 +384,44 @@ coherence_states snoopMESIF(bus_req_type reqType, cache_action *ca,
     case INVALID:
         return INVALID;
     case MODIFIED:
-        indicateShared(addr, procNum); // Needed for E state
         if (reqType == BUSRD) {
+            sendData(addr, procNum);
+            indicateShared(addr, procNum);
             *ca = INVALIDATE;
-            return SHARED_STATE;
+            return procNum == 0 ? FORWARD : SHARED_STATE;
+            // return SHARED_STATE;
         } else if (reqType == BUSWR) {
+            sendData(addr, procNum);
             *ca = INVALIDATE;
             return INVALID;
         }
         return MODIFIED;
     case EXCLUSIVE:
-        indicateShared(addr, procNum);
         if (reqType == BUSRD) {
-            *ca = INVALIDATE;
+            if (procNum == 0) {
+                indicateShared(addr, procNum);
+                return FORWARD;
+            } else {
+                return SHARED_STATE;
+            }
+            // indicateShared(addr, procNum);
             return SHARED_STATE;
         } else if (reqType == BUSWR) {
-            *ca = INVALIDATE;
             return INVALID;
         }
         return EXCLUSIVE;
     case SHARED_STATE:
-        indicateShared(addr, procNum);
-        if (reqType == BUSWR) {
-            *ca = INVALIDATE;
+        if (reqType == BUSRD) {
+            return SHARED_STATE;
+        } else if (reqType == BUSWR) {
             return INVALID;
         }
         return SHARED_STATE;
     case FORWARD:
-        indicateShared(addr, procNum);
         if (reqType == BUSRD) {
-            *ca = INVALIDATE;
+            indicateShared(addr, procNum);
             return SHARED_STATE;
         } else if (reqType == BUSWR) {
-            *ca = INVALIDATE;
             return INVALID;
         }
         return FORWARD;
@@ -425,6 +430,7 @@ coherence_states snoopMESIF(bus_req_type reqType, cache_action *ca,
             *ca = DATA_RECV;
             return EXCLUSIVE;
         } else if (reqType == SHARED) {
+            *ca = DATA_RECV;
             return FORWARD;
         }
         return INVALID_READ;
