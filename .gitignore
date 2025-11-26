@@ -15,3 +15,6 @@ simpleCache/libsimpleCache.so
 shark-traces/*
 traces/*
 *.csv
+4proc_migratory/*
+4proc_prodcons/*
+4proc_readonly/*
