@@ -12,8 +12,8 @@
         printf(args);                                                          \
     }
 
-typedef enum cacheResult_ { HIT , MISS , MISS_EVICT , NA } cacheResult;
-typedef enum reqType_ { PERM , INV } reqType;
+typedef enum cacheResult_ { HIT, MISS, MISS_EVICT, NA } cacheResult;
+typedef enum reqType_ { PERM, INV } reqType;
 
 typedef struct _pendingRequest {
     int64_t addr;
@@ -26,16 +26,16 @@ typedef struct _pendingRequest {
 
 // nul terminated so tail points to last node
 typedef struct _memRequest {
-    pendingRequest* head;
-    pendingRequest* tail;
+    pendingRequest *head;
+    pendingRequest *tail;
     void (*memCallback)(int, int64_t);
     int64_t requestTag;
     struct _memRequest *next;
 } memRequest;
 
 typedef struct _requestQueue {
-    memRequest* head;
-    memRequest* tail;
+    memRequest *head;
+    memRequest *tail;
 } requestQueue;
 
 // int64_t globalTag = 0;
@@ -52,25 +52,26 @@ int CADSS_VERBOSE = 0;
 
 requestQueue memReqQueue = {0};
 
-// pushes a new pending request (PERM/INV) to the end of a single memory request's queue
-void enqueueNode(memRequest* req, pendingRequest* node) {
-   if (req->head == NULL) {
-       req->head = node;
-       req->tail = node;
-   } 
-   else {
-       assert(req->tail != NULL);
-       req->tail->next = node;
-       req->tail = node;
-   }
+// pushes a new pending request (PERM/INV) to the end of a single memory
+// request's queue
+void enqueueNode(memRequest *req, pendingRequest *node) {
+    if (req->head == NULL) {
+        req->head = node;
+        req->tail = node;
+    } else {
+        assert(req->tail != NULL);
+        req->tail->next = node;
+        req->tail = node;
+    }
 }
 
-// pops the pending request (PERM/INV) from the front of a single memory request's queue
-void dequeuePendingRequest(memRequest* req) {
+// pops the pending request (PERM/INV) from the front of a single memory
+// request's queue
+void dequeuePendingRequest(memRequest *req) {
     assert(req->head != NULL && req->tail != NULL);
 
     DPRINTF("popping from queue\n");
-    pendingRequest* temp = req->head;
+    pendingRequest *temp = req->head;
     if (req->head == req->tail) {
         req->tail = NULL;
     }
@@ -79,10 +80,10 @@ void dequeuePendingRequest(memRequest* req) {
     free(temp);
 }
 
-// given pending request (PERM/INV) fields, create the pending request and enqueue it to the
-// given memory request's queue
-void enqueuePendingRequest(memRequest* req, int64_t addr, bool isLoad,
-                    reqType requestType, cacheResult cacheResult) {
+// given pending request (PERM/INV) fields, create the pending request and
+// enqueue it to the given memory request's queue
+void enqueuePendingRequest(memRequest *req, int64_t addr, bool isLoad,
+                           reqType requestType, cacheResult cacheResult) {
     struct _pendingRequest *newReq = malloc(sizeof(struct _pendingRequest));
     // initialize newReq
     newReq->addr = addr;
@@ -94,7 +95,8 @@ void enqueuePendingRequest(memRequest* req, int64_t addr, bool isLoad,
     enqueueNode(req, newReq);
 }
 
-memRequest *enqueueMemRequest(void (*memCallback)(int, int64_t), int64_t requestTag) {
+memRequest *enqueueMemRequest(void (*memCallback)(int, int64_t),
+                              int64_t requestTag) {
     memRequest *memReq = malloc(sizeof(struct _memRequest));
     memReq->head = NULL;
     memReq->tail = NULL;
@@ -104,21 +106,21 @@ memRequest *enqueueMemRequest(void (*memCallback)(int, int64_t), int64_t request
 
     if (memReqQueue.head == NULL) {
         memReqQueue.head = memReq;
-       memReqQueue.tail = memReq;
+        memReqQueue.tail = memReq;
     } else {
         assert(memReqQueue.tail != NULL);
-       memReqQueue.tail->next = memReq;
-       memReqQueue.tail = memReq;
+        memReqQueue.tail->next = memReq;
+        memReqQueue.tail = memReq;
     }
 
     assert(memReqQueue.head != NULL && memReqQueue.tail != NULL);
     return memReq;
 }
 
-void dequeueMemRequest(memRequest* memReq) {
+void dequeueMemRequest(memRequest *memReq) {
     assert(memReqQueue.head != NULL && memReqQueue.tail != NULL);
     DPRINTF("popping from queue\n");
-    memRequest* temp = memReqQueue.head;
+    memRequest *temp = memReqQueue.head;
     if (memReqQueue.head == memReqQueue.tail) {
         memReqQueue.tail = NULL;
     }
@@ -130,6 +132,7 @@ void dequeueMemRequest(memRequest* memReq) {
 void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t));
 void coherCallback(int type, int procNum, int64_t addr);
+void clearCache();
 
 unsigned long E, s, b, victim_i, k = 0;
 unsigned long S, B, R = 0;
@@ -148,13 +151,13 @@ cache_line **main_cache = NULL;
 // 1d array of cache_lines
 cache_line *victim_cache = NULL;
 
-void assert_set_all_valid(cache_line* set, size_t E) {
+void assert_set_all_valid(cache_line *set, size_t E) {
     for (unsigned long line_index = 0; line_index < E; line_index++) {
         assert(set[line_index].valid_bit);
     }
 }
 
-size_t find_evict(cache_line* set, size_t E, bool evict_rrip) {
+size_t find_evict(cache_line *set, size_t E, bool evict_rrip) {
     // need to evict from MAIN
     unsigned long evict_index = 0;
     if (evict_rrip) {
@@ -194,7 +197,6 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
     addr_set_index = (addr << (64UL - (s + b))) >> (64UL - s);
 
     cache_line *curr_set = main_cache[addr_set_index];
-    
 
     // Look for MAIN hit
     for (unsigned long line_index = 0; line_index < E; line_index++) {
@@ -204,7 +206,8 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
             // update LRU_counter
             curr_set[line_index].LRU_counter = iteration;
             // update dirty bit
-            if (is_store) curr_set[line_index].dirty_bit = true;
+            if (is_store)
+                curr_set[line_index].dirty_bit = true;
             // update RRPV
             curr_set[line_index].RRPV = 0;
             return 0; // MAIN HIT
@@ -229,7 +232,8 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
     unsigned long evict_index = find_evict(curr_set, E, is_rrip);
 
     DPRINTF("set index: %lX\n", addr_set_index);
-    *evict_addr = (curr_set[evict_index].tag << (s + b)) + (addr_set_index << b);
+    *evict_addr =
+        (curr_set[evict_index].tag << (s + b)) + (addr_set_index << b);
 
     DPRINTF("calculated evict address: 0x%lX\n", *evict_addr);
 
@@ -247,7 +251,8 @@ int cache_access(unsigned long addr, unsigned long *evict_addr, bool is_store) {
     return 2; // MISS and EVICT
 }
 
-int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_store) {
+int cache_access_victim(unsigned long addr, unsigned long *evict_addr,
+                        bool is_store) {
     unsigned long addr_set_index, addr_tag, victim_addr_tag;
     addr_tag = addr >> (s + b);
     victim_addr_tag = addr >> b;
@@ -263,7 +268,8 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
             // update LRU_counter
             curr_set[line_index].LRU_counter = iteration;
             // update dirty bit
-            if (is_store) curr_set[line_index].dirty_bit = true;
+            if (is_store)
+                curr_set[line_index].dirty_bit = true;
             // update RRPV
             curr_set[line_index].RRPV = 0;
             return 0; // MAIN HIT
@@ -271,33 +277,37 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
     }
 
     // MAIN miss, Look for VICTIM HIT
-    for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
+    for (unsigned long vic_line_index = 0; vic_line_index < victim_i;
+         vic_line_index++) {
         if ((victim_cache[vic_line_index].tag == victim_addr_tag) &&
             victim_cache[vic_line_index].valid_bit) {
             // Found tag + valid bit YAY, victim hit!!
             // update LRU_counter
             victim_cache[vic_line_index].LRU_counter = iteration;
             // update dirty bit
-            if (is_store) victim_cache[vic_line_index].dirty_bit = true;
+            if (is_store)
+                victim_cache[vic_line_index].dirty_bit = true;
             // update RRPV
             victim_cache[vic_line_index].RRPV = 0;
 
-            // swap into main cache (guaranteed corresponding main cache set is full)
+            // swap into main cache (guaranteed corresponding main cache set is
+            // full)
             assert_set_all_valid(curr_set, E);
 
             // Find evict index in main cache set
-            unsigned long evict_index = find_evict(curr_set, E, is_rrip); 
+            unsigned long evict_index = find_evict(curr_set, E, is_rrip);
 
             // make new tags as we are switching cache configurations
-            unsigned long lru_to_victim_tag = (curr_set[evict_index].tag << s) + addr_set_index;
+            unsigned long lru_to_victim_tag =
+                (curr_set[evict_index].tag << s) + addr_set_index;
             unsigned long victim_to_lru_tag = addr_tag;
 
             // swap
             cache_line temp = {0};
 
             memcpy(&temp, &victim_cache[vic_line_index], sizeof(cache_line));
-            memcpy(&victim_cache[vic_line_index], &curr_set[evict_index], 
-                    sizeof(cache_line));
+            memcpy(&victim_cache[vic_line_index], &curr_set[evict_index],
+                   sizeof(cache_line));
             memcpy(&curr_set[evict_index], &temp, sizeof(cache_line));
 
             victim_cache[vic_line_index].tag = lru_to_victim_tag;
@@ -329,20 +339,23 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
     // if victim cache needs to evict, then evict address is reported
 
     // need to evict from MAIN
-    unsigned long evict_index = find_evict(curr_set, E, is_rrip); 
+    unsigned long evict_index = find_evict(curr_set, E, is_rrip);
 
     // can freely bring into VICTIM
-    for (unsigned long vic_line_index = 0; vic_line_index < victim_i; vic_line_index++) {
+    for (unsigned long vic_line_index = 0; vic_line_index < victim_i;
+         vic_line_index++) {
         if (!victim_cache[vic_line_index].valid_bit) {
             // make new tags as we are switching cache configurations
-            unsigned long lru_to_victim_tag = (curr_set[evict_index].tag << s) + 
-                                                (addr_set_index);
+            unsigned long lru_to_victim_tag =
+                (curr_set[evict_index].tag << s) + (addr_set_index);
 
             // main LRU evict -> victim free spot
             victim_cache[vic_line_index].valid_bit = true;
-            victim_cache[vic_line_index].dirty_bit = curr_set[evict_index].dirty_bit;
+            victim_cache[vic_line_index].dirty_bit =
+                curr_set[evict_index].dirty_bit;
             victim_cache[vic_line_index].tag = lru_to_victim_tag;
-            victim_cache[vic_line_index].LRU_counter = curr_set[evict_index].LRU_counter;
+            victim_cache[vic_line_index].LRU_counter =
+                curr_set[evict_index].LRU_counter;
             victim_cache[vic_line_index].RRPV = curr_set[evict_index].RRPV;
 
             // new address -> main
@@ -351,26 +364,25 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
             curr_set[evict_index].tag = addr_tag;
             curr_set[evict_index].LRU_counter = iteration;
             curr_set[evict_index].RRPV = R - 1;
-            return 1; // MAIN MISS, VICTIM MISS, EVICT FROM MAIN TO VICTIM CACHE, 
-                      // no overall evict, just permreq
+            return 1; // MAIN MISS, VICTIM MISS, EVICT FROM MAIN TO VICTIM
+                      // CACHE, no overall evict, just permreq
         }
     }
 
     // evict from VICTIM
     unsigned long vic_LRU_index = find_evict(victim_cache, victim_i, false);
 
-    // victim cache doesn't have room, evict victim LRU + replace w/ new address info
-    // evict victim LRU -- set evict_addr = victim tag << b
-    // main LRU -> victim LRU -- from before
-    // new address -> main cache -- from before
-    
+    // victim cache doesn't have room, evict victim LRU + replace w/ new address
+    // info evict victim LRU -- set evict_addr = victim tag << b main LRU ->
+    // victim LRU -- from before new address -> main cache -- from before
+
     *evict_addr = victim_cache[vic_LRU_index].tag << b;
 
     // make new tags as we are switching cache configurations
-    unsigned long lru_to_victim_tag = (curr_set[evict_index].tag << s) + 
-                                        addr_set_index;
+    unsigned long lru_to_victim_tag =
+        (curr_set[evict_index].tag << s) + addr_set_index;
 
-    // main LRU evict -> victim LRU spot 
+    // main LRU evict -> victim LRU spot
     victim_cache[vic_LRU_index].valid_bit = true;
     victim_cache[vic_LRU_index].dirty_bit = curr_set[evict_index].dirty_bit;
     victim_cache[vic_LRU_index].tag = lru_to_victim_tag;
@@ -396,7 +408,8 @@ int cache_access_victim(unsigned long addr, unsigned long *evict_addr, bool is_s
  * Updates cache with result of load operation using a given address
  */
 int load(unsigned long addr, unsigned long *evict_addr) {
-    return victim_i > 0 ? cache_access_victim(addr, evict_addr, false) : cache_access(addr, evict_addr, false);
+    return victim_i > 0 ? cache_access_victim(addr, evict_addr, false)
+                        : cache_access(addr, evict_addr, false);
 }
 
 /**
@@ -407,7 +420,8 @@ int load(unsigned long addr, unsigned long *evict_addr) {
  * Updates cache with result of store operation using a given address
  */
 int store(unsigned long addr, unsigned long *evict_addr) {
-    return victim_i > 0 ? cache_access_victim(addr, evict_addr, true) : cache_access(addr, evict_addr, true);
+    return victim_i > 0 ? cache_access_victim(addr, evict_addr, true)
+                        : cache_access(addr, evict_addr, true);
 }
 
 cache *init(cache_sim_args *csa) {
@@ -457,12 +471,13 @@ cache *init(cache_sim_args *csa) {
     for (unsigned long i = 0; i < S; i++) {
         main_cache[i] = (cache_line *)calloc(E, sizeof(cache_line));
     }
-    
+
     // create victim cache -- i lines
     victim_cache = (cache_line *)calloc(victim_i, sizeof(cache_line));
 
     self = malloc(sizeof(cache));
     self->memoryRequest = memoryRequest;
+    self->clearCache = clearCache;
     self->si.tick = tick;
     self->si.finish = finish;
     self->si.destroy = destroy;
@@ -473,11 +488,24 @@ cache *init(cache_sim_args *csa) {
     return self;
 }
 
+void clearCache() {
+    // clear main cache
+    for (unsigned long i = 0; i < S; i++) {
+        for (unsigned long j = 0; j < E; j++) {
+            main_cache[i][j].valid_bit = false;
+        }
+    }
 
-// we only call permReq on misses, but what we consider a cache miss might not be a cache miss 
-// according to coherence. in those cases we won't get a callback so we just need to advance 
-// the queue manually ourselves (aka we can't wait for next tick)
-// note this only happens if permReq returns 1
+    // clear victim cache -- i lines
+    for (unsigned long i = 0; i < victim_i; i++) {
+        victim_cache[i].valid_bit = false;
+    }
+}
+
+// we only call permReq on misses, but what we consider a cache miss might not
+// be a cache miss according to coherence. in those cases we won't get a
+// callback so we just need to advance the queue manually ourselves (aka we
+// can't wait for next tick) note this only happens if permReq returns 1
 void handlePermReq() {
     memRequest *q = memReqQueue.head;
     q->head->isStarted = true;
@@ -521,7 +549,6 @@ void coherCallback(int type, int procNum, int64_t addr) {
     }
 }
 
-
 void memoryRequest(trace_op *op, int processorNum, int64_t tag,
                    void (*callback)(int, int64_t)) {
     assert(op != NULL);
@@ -564,8 +591,10 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
             // miss and evict
             DPRINTF("miss, enqueued %lX, evicting %lX\n", addr, evict_addr);
 
-            enqueuePendingRequest(memReq, evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
-            enqueuePendingRequest(memReq, addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
+            enqueuePendingRequest(memReq, evict_addr, op->op == MEM_LOAD, INV,
+                                  MISS_EVICT);
+            enqueuePendingRequest(memReq, addr, op->op == MEM_LOAD, PERM,
+                                  MISS_EVICT);
         } else if (res1 == 0) {
             DPRINTF("hit, enqueued %lX\n", addr);
             enqueuePendingRequest(memReq, addr, op->op == MEM_LOAD, PERM, HIT);
@@ -577,28 +606,35 @@ void memoryRequest(trace_op *op, int processorNum, int64_t tag,
         if (op->memAddress % B + op->size > B) {
             // access spans two lines, load the next address as well
             uint64_t next_addr = (op->memAddress + B) & ~(B - 1);
-            // if s==0, just send perm request, but don't do anything in the cache because yes...
+            // if s==0, just send perm request, but don't do anything in the
+            // cache because yes...
             if (s == 0) {
                 DPRINTF("second req, enqueued %lX\n", next_addr);
-                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, NA);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD,
+                                      PERM, NA);
                 break;
             }
-            
+
             res2 = op->op == MEM_LOAD ? load(next_addr, &evict_addr)
                                       : store(next_addr, &evict_addr);
             if (res2 == 1) {
                 // just miss
                 DPRINTF("second miss, enqueued %lX\n", next_addr);
-                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, MISS);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD,
+                                      PERM, MISS);
             } else if (res2 == 2) {
                 // miss and evict
-                DPRINTF("second miss, enqueued %lX, evicting %lX\n", next_addr, evict_addr);
+                DPRINTF("second miss, enqueued %lX, evicting %lX\n", next_addr,
+                        evict_addr);
 
-                enqueuePendingRequest(memReq, evict_addr, op->op == MEM_LOAD, INV, MISS_EVICT);
-                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, MISS_EVICT);
+                enqueuePendingRequest(memReq, evict_addr, op->op == MEM_LOAD,
+                                      INV, MISS_EVICT);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD,
+                                      PERM, MISS_EVICT);
             } else if (res2 == 0) {
                 DPRINTF("second hit, enqueued %lX\n", next_addr);
-                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD, PERM, HIT);
+                enqueuePendingRequest(memReq, next_addr, op->op == MEM_LOAD,
+                                      PERM, HIT);
             } else {
                 assert(false);
             }
@@ -627,8 +663,7 @@ void advanceQueue() {
             memReqQueue.head = q->next; // moves on to the next memory request
             free(q);
         }
-    }
-    else if (!q->head->isStarted) {
+    } else if (!q->head->isStarted) {
         q->head->requestType == INV ? handleInvReq() : handlePermReq();
     }
 }

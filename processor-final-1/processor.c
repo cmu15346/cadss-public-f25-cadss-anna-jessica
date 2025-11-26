@@ -37,7 +37,8 @@ typedef struct CDB_ {
 
 typedef struct instr_ {
     bool is_long;
-    int op_typ; // -1 = normal , 0 = memory , 1 = branch
+    int op_typ; // -1 = normal , 0 = memory
+                // 1 = correctly predicted branch, 2 = mispredicted branch
     trace_op *trace_op;
     bool fired;
     uint32_t FU;
@@ -365,7 +366,8 @@ void print_stats() {
     // number of ticks per memory request: %.2f\n", avgMemTicks);
     // double avgMemStallTicks =
     //     memStalls == 0 ? 0 : (double)memStallTicks / (double)memStalls;
-    // printf("    -   Average number of ticks stalled when ALU instr is blocked "
+    // printf("    -   Average number of ticks stalled when ALU instr is blocked
+    // "
     //        "by a memory request: %.2f\n",
     //        avgMemStallTicks);
 
@@ -384,21 +386,26 @@ void print_stats() {
 
     printf("Stall Summary:\n");
     // double percentDepTick =
-    //     100 * (tickCount == 0 ? 0 : (double)dataStallTicks / (double)tickCount);
-    // printf("    -   Percent data dependency stall ticks out of total: %.2f%%\n",
+    //     100 * (tickCount == 0 ? 0 : (double)dataStallTicks /
+    //     (double)tickCount);
+    // printf("    -   Percent data dependency stall ticks out of total:
+    // %.2f%%\n",
     //        percentDepTick);
     // double percentCacheTick =
     //     100 * (tickCount == 0 ? 0 : (double)memStalls / (double)tickCount);
     // printf("    -   Percent cache miss stall ticks out of total: %f%%\n",
     //        percentCacheTick);
     // double percentBranchTick =
-    //     100 * (tickCount == 0 ? 0 : (double)branchStalls / (double)tickCount);
+    //     100 * (tickCount == 0 ? 0 : (double)branchStalls /
+    //     (double)tickCount);
     // printf("    -   Percent mispredicted branch stall ticks out of total: "
     //        "%.2f%%\n",
     //        percentBranchTick);
     printf("    -   Data dependency stall ticks: %ld\n", dataStallTicks);
     printf("    -   Cache miss stall ticks: %ld\n", memStallTicks);
     printf("    -   Mispredicted branch stall ticks: %ld\n", branchStalls);
+
+    printf("Number of mispredicted branches: %ld\n", numMispredBranches);
 }
 
 int tick(void) {
@@ -444,7 +451,7 @@ int tick(void) {
             if (queue_empty(state_update_queue))
                 break;
             instr *I = queue_pop(state_update_queue);
-            if (I->op_typ != 1) { // ALU or mem instr
+            if (I->op_typ != 1 && I->op_typ != 2) { // ALU or mem instr
                 buses[c].busy = true;
                 buses[c].tag = I->tag;
                 buses[c].val = 0;
@@ -751,7 +758,7 @@ int tick(void) {
                 if (pendingBranch[i] == 1) {
                     numMispredBranches++;
                 }
-                new_instr = init_instr(false, 1, nextOp, nextOp->dest_reg,
+                new_instr = init_instr(false, pendingBranch[i] == 1 ? 2 : 1, nextOp, nextOp->dest_reg,
                                        nextOp->src_reg);
                 // DPRINTF("push B %lx into dispatch queue\n",
                 // nextOp->pcAddress);
@@ -787,7 +794,10 @@ int tick(void) {
                 progress = 1;
 
                 // unstall on any completed branch instruction
-                if (del_instr->op_typ == 1) {
+                if (del_instr->op_typ == 1 || del_instr->op_typ == 2) {
+                    if (del_instr->op_typ == 2) {
+                        cs->clearCache();
+                    }
                     pendingBranch[i] = 0;
                 }
 

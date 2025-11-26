@@ -15,6 +15,7 @@ typedef struct _cache {
     sim_interface si;
     void (*memoryRequest)(trace_op*, int, int64_t,
                           void (*callback)(int, int64_t));
+    void (*clearCache)();
     debug_env_vars dbgEnv;
 } cache;
 
